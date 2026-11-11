@@ -219,6 +219,102 @@ then the triangular arc reactor lighting up — with a start-up sound under it
 
 ---
 
+## Reach JARVIS from anywhere — and let him call you
+
+Three optional extras, each independent of the others:
+
+- **Open JARVIS from your phone or another computer**, privately, over
+  [Tailscale](https://tailscale.com).
+- **Phone calls.** JARVIS rings your mobile and holds a real spoken conversation
+  ("call me in twenty minutes about the render"), and picks up when you ring him.
+- **WhatsApp.** He messages you ("send that link to my phone"), and you can
+  message him back from anywhere.
+
+Your computer is still the brain, so it has to be on and awake. `npm run
+remote` keeps a Mac awake for as long as JARVIS runs.
+
+### 1. Tailscale — reach the interface from your phone
+
+1. Install Tailscale on this computer **and** on your phone
+   (<https://tailscale.com/download>), and sign in with the same account on both.
+2. In the Tailscale admin console, under **DNS**, turn on **MagicDNS** and
+   **HTTPS Certificates** (<https://login.tailscale.com/admin/dns>).
+3. Start JARVIS with:
+
+   ```bash
+   npm run remote
+   ```
+
+   It prints an address like `https://your-mac.tailnet-name.ts.net`. Open it in
+   Chrome on any of your Tailscale devices.
+
+Only devices signed in to your tailnet can open that address; nothing is opened
+to the internet. It is https, which is what lets the browser use the microphone
+there. Behind it, the page talks to the bridge through the dev server's
+`/bridge` proxy, and the bridge accepts exactly that one extra origin.
+
+### 2. Twilio — calls and WhatsApp
+
+1. Make an account at <https://www.twilio.com>. A trial account works for
+   testing; it can only call and message numbers you have verified, which is
+   yours.
+2. **For calls**, buy a phone number with voice in the Twilio console. Then
+   open **Voice → Settings → General** and enable the **Predictive and
+   Generative AI/ML Features Addendum**. Calls run on Twilio's
+   ConversationRelay, which needs it.
+3. **For WhatsApp**, open **Messaging → Try it out → Send a WhatsApp message**
+   and send the `join …` code it shows from your own WhatsApp to the sandbox
+   number. Then, under **Sandbox settings**, set **When a message comes in** to
+   the address the bridge prints at startup (it ends in `/twilio/whatsapp`),
+   method POST.
+4. Put your settings in `.env.local` (git ignores it):
+
+   ```bash
+   TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   TWILIO_AUTH_TOKEN=your-auth-token
+   JARVIS_OWNER_PHONE=+31612345678
+   TWILIO_PHONE_NUMBER=+15551234567
+   ```
+
+5. Start with `npm run remote`. The first time, Tailscale may ask you to allow
+   **Funnel** for your tailnet and print a link to do so. Open it and run the
+   command again.
+
+On startup the bridge points your Twilio number's incoming calls at itself, so
+ringing that number reaches JARVIS. Then just ask: *"call me in ten minutes"*,
+*"send me that on WhatsApp"*. Or ring him, or message him.
+
+**Good to know**
+
+- WhatsApp only lets a business number message you within **24 hours of your
+  last message to it**. The sandbox also expires after a few days of silence;
+  send `join …` again to renew it. For a permanent number, register a WhatsApp
+  sender in Twilio and set `TWILIO_WHATSAPP_FROM`.
+- Twilio charges per minute and per message. A trial account comes with credit.
+- A call starts a fresh conversation, with no memory of what was said in the
+  browser. JARVIS hands it a briefing when he places the call.
+- A call or message scheduled for later is held in memory. Restarting the
+  bridge forgets it.
+
+### How it is kept safe
+
+- **One number.** The tools take no destination. JARVIS can only ever call or
+  message `JARVIS_OWNER_PHONE`, and calls or messages from any other number are
+  rejected or ignored.
+- **A separate door.** Twilio has to reach this computer from the internet, so
+  the phone line is its own small server (port 8788) that serves nothing but
+  three Twilio routes. Tailscale Funnel publishes only that port, as `:8443`.
+  The interface, the bridge, your files and your browser stay private.
+- **Signed requests.** Every webhook must carry a valid `X-Twilio-Signature`,
+  an HMAC keyed with your auth token. A call's audio stream is accepted only
+  with a one-time token that was handed to Twilio inside a signed exchange.
+- **A ceiling.** At most 6 calls and 40 messages go out per hour, whatever the
+  agent is talked into.
+- Everything else about the agent is unchanged: the same model, the same
+  read-only gate and the same tools as in the browser, minus the screen.
+
+---
+
 ## Configuration
 
 Everything is optional in bridge mode. Frontend settings live in `.env.local`
@@ -247,13 +343,26 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_DEBUG` | off | `1` logs every agent message to the bridge terminal, answer text and tool calls included |
 | `JARVIS_VOICE_ID` | none | ElevenLabs voice id |
 | `ELEVENLABS_API_KEY` | none | Optional; enables the ElevenLabs voice + Scribe |
+| `JARVIS_PUBLIC_ORIGIN` | none | Set by `npm run remote`: the Tailscale address the interface is opened from |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | none | Your Twilio account; turns the phone line on |
+| `JARVIS_OWNER_PHONE` | none | Your mobile, e.g. `+31612345678`: the only number JARVIS calls, messages or answers |
+| `TWILIO_PHONE_NUMBER` | none | The Twilio voice number calls come from and go to |
+| `TWILIO_WHATSAPP_FROM` | `+14155238886` | The WhatsApp sender (the sandbox by default) |
+| `JARVIS_PHONE_PUBLIC_URL` | from Funnel | Where Twilio reaches the phone line; `npm run remote` fills it in |
+| `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
+| `JARVIS_PHONE_LANGUAGE` | `nl-NL` | Language callers are heard and answered in |
+| `JARVIS_PHONE_GREETING` | `Ja, meneer?` | What he says when he picks up |
+| `JARVIS_PHONE_TTS_PROVIDER`, `JARVIS_PHONE_VOICE` | Twilio's default | Text-to-speech on calls |
+
+The bridge also reads these from `.env.local`, its own keys only (`JARVIS_*`,
+`TWILIO_*`, `ELEVENLABS_API_KEY`). A value set in the shell wins.
 
 ### Frontend (`.env.local`)
 
 | Variable | Effect |
 |---|---|
 | `VITE_BACKEND` | `bridge` (default) or `direct` |
-| `VITE_BRIDGE_URL` | Where to reach the bridge |
+| `VITE_BRIDGE_URL` | Where to reach the bridge. Default: `ws://localhost:8787` on this machine, the page's own `/bridge` proxy from anywhere else |
 | `VITE_TTS_ENGINE` | `system` or `kokoro` |
 | `VITE_KOKORO_VOICE` | Voice for the Kokoro engine |
 | `VITE_USE_ELEVENLABS` | Force the ElevenLabs voice on |

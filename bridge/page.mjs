@@ -389,7 +389,7 @@ function toLive(html, pageUrl) {
  *
  * @param {string} url
  * @param {'reader'|'live'} mode
- * @param {string} bridgeOrigin  e.g. http://localhost:8787
+ * @param {string} bridgeOrigin  e.g. http://localhost:8787, or https://host/bridge when remote
  */
 export async function renderPage(url, mode, bridgeOrigin) {
   const page = await fetchText(url, {
@@ -422,7 +422,7 @@ export async function renderPage(url, mode, bridgeOrigin) {
       "style-src 'unsafe-inline' https: http: data:; font-src https: http: data:; " +
       `media-src https: http: data:; script-src 'nonce-${nonce}'; form-action 'none'; ` +
       "frame-src 'none'; object-src 'none'; base-uri 'none'"
-    : `default-src 'none'; img-src ${bridgeOrigin} data:; ` +
+    : `default-src 'none'; img-src ${new URL(bridgeOrigin).origin} data:; ` +
       `style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; form-action 'none'; ` +
       "frame-src 'none'; object-src 'none'; base-uri 'none'"
 

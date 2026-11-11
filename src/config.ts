@@ -71,8 +71,22 @@ export const BACKEND: 'bridge' | 'direct' = choice(
  * `wss://` maps to `https://` on its own, which is why this is a prefix swap
  * rather than a hardcoded scheme.
  */
-export const BRIDGE_WS_URL = str(import.meta.env.VITE_BRIDGE_URL) ?? 'ws://localhost:8787'
-export const BRIDGE_HTTP_URL = BRIDGE_WS_URL.replace(/^ws/, 'http')
+/**
+ * Opened on this machine, the page talks to the bridge directly. Opened from
+ * anywhere else — a phone or another laptop, through `npm run remote` — the
+ * bridge is not reachable at localhost (that would be the other device), so
+ * the page goes through the dev server's /bridge proxy on its own address
+ * instead, which also keeps it on https and so keeps the microphone working.
+ */
+function defaultBridgeUrl(): string {
+  if (typeof location === 'undefined') return 'ws://localhost:8787'
+  const local = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname)
+  if (local) return 'ws://localhost:8787'
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/bridge/ws`
+}
+
+export const BRIDGE_WS_URL = str(import.meta.env.VITE_BRIDGE_URL) ?? defaultBridgeUrl()
+export const BRIDGE_HTTP_URL = BRIDGE_WS_URL.replace(/^ws/, 'http').replace(/\/ws$/, '')
 
 /**
  * Speech output engine.
