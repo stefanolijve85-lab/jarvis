@@ -30,10 +30,10 @@ import {
   usingBridge,
   type Msg,
 } from './lib/brain'
-import { startAnalyser, restartAnalyser, micLevel } from './lib/audio'
+import { getMic, startAnalyser, restartAnalyser, micLevel } from './lib/audio'
 import { keepScreenOn } from './lib/wakeLock'
 import { probeCapabilities } from './lib/capabilities'
-import { env } from './config'
+import { env, BRIDGE_HTTP_URL } from './config'
 
 /**
  * The conversation.
@@ -317,6 +317,16 @@ export default function App() {
   }
 
   const onVoiceError = (message: string) => {
+    // On a phone, coming back from another app often ends in the recogniser
+    // being refused the microphone — iOS takes it away from pages in the
+    // background. That is not a verdict, it is a nap: ask for a tap (the one
+    // thing that wins the microphone back) rather than leaving him deaf
+    // behind an error that never clears.
+    const p = store.getState().phase
+    if (/microphone/i.test(message) && p !== 'offline' && p !== 'boot') {
+      setAsleep(true)
+      return
+    }
     store.getState().setError(message)
   }
 
@@ -507,6 +517,7 @@ export default function App() {
     ])
     await warming
     store.getState().setConnected(connectedLabels())
+    void restoreTranscript()
 
     // The analyser is what makes the reactor pulse with your voice. It needs a
     // getUserMedia stream; speech recognition does not, and gets its own. So a
@@ -542,6 +553,27 @@ export default function App() {
     store.getState().setPhase('dormant')
   }
 
+  /**
+   * The last exchanges, back on screen. The bridge keeps every conversation;
+   * a fresh page — or one reopened on the phone — starts by showing where it
+   * was, so "as I said" has something to point at.
+   */
+  const restoreTranscript = async () => {
+    if (!usingBridge || store.getState().turns.length) return
+    try {
+      const res = await fetch(`${BRIDGE_HTTP_URL}/history?limit=6`)
+      const { exchanges } = (await res.json()) as {
+        exchanges?: { user: string; jarvis: string }[]
+      }
+      for (const e of exchanges ?? []) {
+        store.getState().pushTurn({ id: newId(), role: 'user', text: e.user })
+        store.getState().pushTurn({ id: newId(), role: 'jarvis', text: e.jarvis })
+      }
+    } catch {
+      /* nothing to show */
+    }
+  }
+
   // -- coming back after the phone slept -------------------------------------
 
   /**
@@ -570,7 +602,10 @@ export default function App() {
 
   const resume = async () => {
     setAsleep(false)
-    // Everything that needs the tap, first, before anything awaits.
+    store.getState().setError('')
+    // Everything that needs the tap, first, before anything awaits — the
+    // microphone above all, which iOS only grants inside the tap itself.
+    const mic = getMic().catch(() => null)
     unlockSpeechOutput()
     keepScreenOn()
     music.enable()
@@ -579,6 +614,7 @@ export default function App() {
     voice.current?.stop()
     voice.current = null
     void warm().catch(() => {})
+    await mic
     try {
       await restartAnalyser()
     } catch {

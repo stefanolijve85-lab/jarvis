@@ -26,7 +26,7 @@ import { createPhoneLine, phoneConfig, startConversation } from './phone.mjs'
 import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } from './whisper.mjs'
 import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE, PIPER_VOICE_EN } from './voice.mjs'
 import { createTelegram, ffmpeg, hasFfmpeg, telegramConfig } from './telegram.mjs'
-import { appendExchange, historyPrompt, memoryEnabled, memoryPrompt, memoryServer } from './memory.mjs'
+import { appendExchange, historyEnabled, historyPrompt, memoryEnabled, memoryPrompt, memoryServer, recentExchanges } from './memory.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -1239,6 +1239,15 @@ const handleRequest = async (req, res) => {
   // use, and a server-side transcriber cannot. Detecting that the user is
   // speaking at all is done locally with voice-activity detection, which never
   // touches this endpoint; this is only for the words.
+  // The last few exchanges, so an interface that opens — or reopens after the
+  // phone put it away — shows where the conversation was. Same origin and host
+  // checks as everything else on this server.
+  if (req.method === 'GET' && req.url?.startsWith('/history')) {
+    const limit = Math.min(30, Math.max(1, Number(new URL(req.url, 'http://x').searchParams.get('limit')) || 8))
+    res.writeHead(200, { ...cors, 'content-type': 'application/json', 'cache-control': 'no-store' })
+    return res.end(JSON.stringify({ exchanges: historyEnabled() ? recentExchanges(limit) : [] }))
+  }
+
   // Speech to text on this machine, for the talk app. The page sends raw
   // samples — mono 32-bit float PCM at 16 kHz, little-endian — rather than a
   // compressed recording, so nothing here has to decode Safari's codecs.

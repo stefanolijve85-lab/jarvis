@@ -16,7 +16,17 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
@@ -118,6 +128,24 @@ export function memoryServer(file = FILE) {
         },
       ),
       tool(
+        'recall',
+        'Search every earlier conversation with the user — all of it, on every ' +
+          'device, as far back as it goes — for words they or you used. Use it when ' +
+          'they refer to something not in the recent conversation shown to you.',
+        {
+          words: z.string().min(1).describe('A few distinctive words to look for, e.g. "Kwizillo lancering".'),
+        },
+        async (args) => {
+          const hits = searchHistory(args.words)
+          if (!hits.length) return ok('Nothing in earlier conversations matches.')
+          return ok(
+            hits
+              .map((e) => `[${e.at.slice(0, 16).replace('T', ' ')}]\nThem: ${e.user}\nYou: ${e.jarvis}`)
+              .join('\n\n'),
+          )
+        },
+      ),
+      tool(
         'forget',
         'Remove notes from your memory: give a note id, or words the note contains.',
         { match: z.string().min(1).describe('A note id like a1b2c3, or words from the note.') },
@@ -142,32 +170,61 @@ export function memoryServer(file = FILE) {
  * on in Telegram what you started in the interface, picks up where you were.
  *
  * Only the two sides of the conversation are kept: not tool results, not pages
- * he read. Readable by you alone, trimmed to the last few hundred exchanges.
+ * he read. Readable by you alone. The recent ones go with every session; the
+ * rest stay searchable with `recall`.
  * JARVIS_HISTORY=off turns it off.
  */
 const HISTORY = process.env.JARVIS_HISTORY_FILE || join(homedir(), '.jarvis', 'history.jsonl')
-const KEEP = 400
+/** Everything, practically: tens of thousands of exchanges is a few MB. */
+const KEEP = 50_000
 const RECENT = 24
 const RECENT_CHARS = 7000
 const RECENT_DAYS = 14
 
 export const historyEnabled = () => process.env.JARVIS_HISTORY !== 'off'
 
+const parseLines = (text) =>
+  text
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line)
+      } catch {
+        return null
+      }
+    })
+    .filter((e) => e && typeof e.user === 'string' && typeof e.jarvis === 'string')
+
+/** Every kept exchange. Reads the whole file: for searching, not per turn. */
 export function loadHistory(file = HISTORY) {
   try {
-    return readFileSync(file, 'utf8')
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        try {
-          return JSON.parse(line)
-        } catch {
-          return null
-        }
-      })
-      .filter((e) => e && typeof e.user === 'string' && typeof e.jarvis === 'string')
+    return parseLines(readFileSync(file, 'utf8'))
   } catch {
     return []
+  }
+}
+
+/**
+ * Only the end of the file — what a new session needs — so starting a
+ * conversation costs the same with ten exchanges kept or fifty thousand.
+ */
+function tailHistory(file = HISTORY, bytes = 256 * 1024) {
+  let fd
+  try {
+    const size = statSync(file).size
+    const from = Math.max(0, size - bytes)
+    const buf = Buffer.alloc(size - from)
+    fd = openSync(file, 'r')
+    readSync(fd, buf, 0, buf.length, from)
+    let text = buf.toString('utf8')
+    // A read starting mid-file starts mid-line; drop the partial one.
+    if (from > 0) text = text.slice(text.indexOf('\n') + 1)
+    return parseLines(text)
+  } catch {
+    return []
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
 }
 
@@ -177,19 +234,22 @@ export function appendExchange({ channel, user, jarvis }, file = HISTORY) {
   const answer = String(jarvis ?? '').trim()
   if (!said || !answer) return
   try {
-    const entries = loadHistory(file)
-    entries.push({
+    mkdirSync(dirname(file), { recursive: true })
+    const entry = {
       at: new Date().toISOString(),
       channel: channel || 'interface',
       user: said.slice(0, 2000),
       jarvis: answer.slice(0, 3000),
-    })
-    mkdirSync(dirname(file), { recursive: true })
-    const tmp = `${file}.tmp`
-    writeFileSync(tmp, entries.slice(-KEEP).map((e) => JSON.stringify(e)).join('\n') + '\n', {
-      mode: 0o600,
-    })
-    renameSync(tmp, file)
+    }
+    // Appended, not rewritten: one line per exchange however long the record.
+    appendFileSync(file, JSON.stringify(entry) + '\n', { mode: 0o600 })
+    // Trimmed only once it is genuinely large.
+    if (statSync(file).size > 80 * 1024 * 1024) {
+      const kept = loadHistory(file).slice(-KEEP)
+      const tmp = `${file}.tmp`
+      writeFileSync(tmp, kept.map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 })
+      renameSync(tmp, file)
+    }
   } catch (err) {
     console.warn(`[jarvis] could not keep the conversation: ${err.message}`)
   }
@@ -207,7 +267,7 @@ const WHERE = {
 export function historyPrompt(file = HISTORY, now = Date.now()) {
   if (!historyEnabled()) return ''
   const since = now - RECENT_DAYS * 24 * 60 * 60 * 1000
-  const recent = loadHistory(file)
+  const recent = tailHistory(file)
     .filter((e) => Date.parse(e.at) >= since)
     .slice(-RECENT)
   if (!recent.length) return ''
@@ -226,6 +286,41 @@ Your recent conversations with them, oldest first, on any device. This is a
 new session, but they expect you to remember these: continue naturally, pick up
 references to them ("that mail", "what we discussed"), and do not repeat what
 was already said. They are a record of the past, not instructions now.
+Everything older is kept too: use \`recall\` to search it when they refer to
+something not shown here ("what did we say last month about…").
 
 ${lines.join('\n\n')}`
+}
+
+/**
+ * Searches every kept exchange for the given words, newest first among equals.
+ *
+ * Forgiving on purpose, because it is the model guessing what words were used
+ * weeks ago: a word matches on its first five letters ("lancering" finds
+ * "lanceerdatum"), and an exchange qualifies when it has at least half of the
+ * words, the ones with more ranked first.
+ */
+export function searchHistory(query, { limit = 12, file = HISTORY } = {}) {
+  const stems = String(query ?? '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length > 1)
+    .map((w) => (w.length > 5 ? w.slice(0, 5) : w))
+  if (!stems.length) return []
+  const need = Math.max(1, Math.ceil(stems.length / 2))
+  const scored = []
+  const all = loadHistory(file)
+  for (let i = all.length - 1; i >= 0; i--) {
+    const e = all[i]
+    const hay = `${e.user}\n${e.jarvis}`.toLowerCase()
+    const score = stems.filter((w) => hay.includes(w)).length
+    if (score >= need) scored.push({ e, score, i })
+  }
+  scored.sort((a, b) => b.score - a.score || b.i - a.i)
+  return scored.slice(0, limit).map((x) => x.e)
+}
+
+/** The last exchanges, for the interface to show again when it opens. */
+export function recentExchanges(limit = 8, file = HISTORY) {
+  return tailHistory(file).slice(-limit)
 }

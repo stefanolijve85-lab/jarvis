@@ -79,3 +79,33 @@ test('old conversations fall out of the prompt, recent ones stay', () => {
   assert.equal(historyPrompt(file, later), '')
   assert.notEqual(historyPrompt(file), '')
 })
+
+import { recentExchanges, searchHistory } from '../bridge/memory.mjs'
+import { writeFileSync } from 'node:fs'
+
+test('every earlier conversation can be searched, newest first', () => {
+  const file = freshHistory()
+  const old = { at: '2026-01-02T10:00:00.000Z', channel: 'telegram', user: 'De Kwizillo lancering is 3 maart', jarvis: 'Genoteerd, meneer.' }
+  writeFileSync(file, JSON.stringify(old) + '\n')
+  appendExchange({ channel: 'interface', user: 'Hoe gaat het met Kwizillo?', jarvis: 'Prima, meneer.' }, file)
+  const hits = searchHistory('kwizillo lancering', { file })
+  // Both mention Kwizillo; the one that also has the launch ranks first.
+  assert.equal(hits[0].at, old.at)
+  assert.equal(searchHistory('kwizillo', { file }).length, 2)
+  // A word matches on its start: "lanceerdatum" is found by "lancering".
+  assert.equal(searchHistory('lanceerdatum', { file })[0].at, old.at)
+  assert.equal(searchHistory('', { file }).length, 0)
+  // Too old for the prompt, still findable.
+  assert.doesNotMatch(historyPrompt(file), /3 maart/)
+})
+
+test('the last exchanges are read from the end of a long record', () => {
+  const file = freshHistory()
+  const lines = []
+  for (let i = 0; i < 3000; i++) {
+    lines.push(JSON.stringify({ at: new Date().toISOString(), channel: 'talk', user: `vraag ${i} ${'x'.repeat(200)}`, jarvis: `antwoord ${i}` }))
+  }
+  writeFileSync(file, lines.join('\n') + '\n')
+  const last = recentExchanges(3, file)
+  assert.deepEqual(last.map((e) => e.jarvis), ['antwoord 2997', 'antwoord 2998', 'antwoord 2999'])
+})
