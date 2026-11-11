@@ -11,8 +11,10 @@
  * into ~/.jarvis/piper — about 80 MB — and from then on everything is local:
  * no account, no key, no cost per word.
  *
- *   JARVIS_PIPER_VOICE  which voice (default nl-rdh-medium, a Dutch male voice;
- *                       also nl-nathalie-x-low, nl-mls_5809-low, …)
+ *   JARVIS_PIPER_VOICE  the talk app's voice (default nl-rdh-medium, a Dutch
+ *                       male voice; also nl-nathalie-x-low, nl-mls_5809-low, …)
+ *   JARVIS_PIPER_VOICE_EN  the full interface's, which speaks English
+ *                       (default en-gb-alan-low, British male)
  *   JARVIS_PIPER_MODEL  an .onnx voice file you downloaded yourself, instead
  *   JARVIS_PIPER=off    switch it off; the talk app falls back to the phone
  */
@@ -30,6 +32,11 @@ const PROGRAM_TAG = '2023.11.14-2'
 const VOICES_TAG = 'v0.0.2'
 
 export const PIPER_VOICE = process.env.JARVIS_PIPER_VOICE?.trim() || 'nl-rdh-medium'
+/**
+ * The English voice, for the full interface: JARVIS speaks English there, and
+ * a Dutch voice reading English is hard to follow. Alan is a British male.
+ */
+export const PIPER_VOICE_EN = process.env.JARVIS_PIPER_VOICE_EN?.trim() || 'en-gb-alan-low'
 export const piperEnabled = () => process.env.JARVIS_PIPER !== 'off'
 
 /** The release archive for this computer, or null where Piper has none. */
@@ -45,7 +52,6 @@ export function programArchive(platform = process.platform, arch = process.arch)
 }
 
 const PROGRAM = join(ROOT, 'piper', 'piper')
-const VOICE_DIR = join(ROOT, 'voices', PIPER_VOICE)
 
 async function download(url, file) {
   mkdirSync(dirname(file), { recursive: true })
@@ -63,65 +69,90 @@ function untar(file, into) {
   })
 }
 
-function findModel() {
-  const own = process.env.JARVIS_PIPER_MODEL?.trim()
-  if (own) return existsSync(own) ? own : null
-  if (!existsSync(VOICE_DIR)) return null
-  const onnx = readdirSync(VOICE_DIR).find((f) => f.endsWith('.onnx'))
-  return onnx ? join(VOICE_DIR, onnx) : null
+/** Only names from the voice list: letters, digits, dash and underscore. */
+const voiceName = (name) => {
+  if (!/^[a-z]{2}-[A-Za-z0-9_-]+$/.test(name)) throw new Error(`not a Piper voice name: ${name}`)
+  return name
 }
 
-let ready = null
-let state = 'idle'
-let model = null
-let sampleRate = 22050
+function findModel(name) {
+  const own = process.env.JARVIS_PIPER_MODEL?.trim()
+  if (own && name === PIPER_VOICE) return existsSync(own) ? own : null
+  const dir = join(ROOT, 'voices', voiceName(name))
+  if (!existsSync(dir)) return null
+  const onnx = readdirSync(dir).find((f) => f.endsWith('.onnx'))
+  return onnx ? join(dir, onnx) : null
+}
 
-/** 'off', 'idle', 'loading', 'ready' or 'failed'. */
-export const voiceState = () => (piperEnabled() ? state : 'off')
-
-/** Downloads Piper and the voice if they are not here yet. Shared promise. */
-export function loadVoice() {
-  if (!piperEnabled()) return Promise.reject(new Error('the voice is switched off'))
-  ready ??= (async () => {
-    state = 'loading'
-    if (!existsSync(PROGRAM)) {
-      const url = programArchive()
-      if (!url) throw new Error(`Piper has no build for ${process.platform}-${process.arch}`)
-      console.log('[jarvis] downloading the voice engine (Piper)…')
-      const file = join(ROOT, 'piper.tar.gz')
-      await download(url, file)
-      await untar(file, ROOT)
-      rmSync(file, { force: true })
-    }
-    model = findModel()
-    if (!model) {
-      if (process.env.JARVIS_PIPER_MODEL) {
-        throw new Error(`JARVIS_PIPER_MODEL ${process.env.JARVIS_PIPER_MODEL} does not exist`)
-      }
-      console.log(`[jarvis] downloading the voice ${PIPER_VOICE}…`)
-      const file = join(ROOT, `${PIPER_VOICE}.tar.gz`)
-      await download(`${RELEASE}/${VOICES_TAG}/voice-${PIPER_VOICE}.tar.gz`, file)
-      await untar(file, VOICE_DIR)
-      rmSync(file, { force: true })
-      model = findModel()
-      if (!model) throw new Error(`the ${PIPER_VOICE} download held no voice`)
-    }
-    try {
-      const config = JSON.parse(readFileSync(`${model}.json`, 'utf8'))
-      sampleRate = Number(config?.audio?.sample_rate) || 22050
-    } catch {
-      /* keep the default */
-    }
-    // One short sentence proves the program runs on this machine at all.
-    await synthesizeRaw('Klaar.')
-    state = 'ready'
-    console.log(`[jarvis] voice ready — Piper, ${PIPER_VOICE}`)
+let program = null
+/** The Piper program itself, downloaded once. */
+function loadProgram() {
+  program ??= (async () => {
+    if (existsSync(PROGRAM)) return
+    const url = programArchive()
+    if (!url) throw new Error(`Piper has no build for ${process.platform}-${process.arch}`)
+    console.log('[jarvis] downloading the voice engine (Piper)…')
+    const file = join(ROOT, 'piper.tar.gz')
+    await download(url, file)
+    await untar(file, ROOT)
+    rmSync(file, { force: true })
   })().catch((err) => {
-    ready = null
-    state = 'failed'
+    program = null
     throw err
   })
-  return ready
+  return program
+}
+
+/** name → promise of { model, sampleRate } */
+const voices = new Map()
+let state = 'idle'
+
+/** The talk app's voice: 'off', 'idle', 'loading', 'ready' or 'failed'. */
+export const voiceState = () => (piperEnabled() ? state : 'off')
+
+/** Downloads Piper and a voice if they are not here yet. Shared per voice. */
+export function loadVoice(name = PIPER_VOICE) {
+  if (!piperEnabled()) return Promise.reject(new Error('the voice is switched off'))
+  const main = name === PIPER_VOICE
+  let loading = voices.get(name)
+  if (!loading) {
+    loading = (async () => {
+      if (main) state = 'loading'
+      await loadProgram()
+      let model = findModel(name)
+      if (!model) {
+        if (main && process.env.JARVIS_PIPER_MODEL) {
+          throw new Error(`JARVIS_PIPER_MODEL ${process.env.JARVIS_PIPER_MODEL} does not exist`)
+        }
+        console.log(`[jarvis] downloading the voice ${name}…`)
+        const file = join(ROOT, `${voiceName(name)}.tar.gz`)
+        await download(`${RELEASE}/${VOICES_TAG}/voice-${name}.tar.gz`, file)
+        await untar(file, join(ROOT, 'voices', name))
+        rmSync(file, { force: true })
+        model = findModel(name)
+        if (!model) throw new Error(`the ${name} download held no voice`)
+      }
+      let sampleRate = 22050
+      try {
+        const config = JSON.parse(readFileSync(`${model}.json`, 'utf8'))
+        sampleRate = Number(config?.audio?.sample_rate) || 22050
+      } catch {
+        /* keep the default */
+      }
+      const voice = { model, sampleRate }
+      // One short sentence proves the program runs on this machine at all.
+      await synthesizeRaw(voice, 'OK.')
+      if (main) state = 'ready'
+      console.log(`[jarvis] voice ready — Piper, ${name}`)
+      return voice
+    })().catch((err) => {
+      voices.delete(name)
+      if (main) state = 'failed'
+      throw err
+    })
+    voices.set(name, loading)
+  }
+  return loading
 }
 
 /**
@@ -139,10 +170,10 @@ export function speakable(text) {
     .slice(0, 800)
 }
 
-function synthesizeRaw(text) {
+function synthesizeRaw(voice, text) {
   return new Promise((resolve, reject) => {
     const dir = dirname(PROGRAM)
-    const child = spawn(PROGRAM, ['--model', model, '--output_raw'], {
+    const child = spawn(PROGRAM, ['--model', voice.model, '--output_raw'], {
       cwd: dir,
       env: {
         ...process.env,
@@ -207,10 +238,10 @@ async function slot(run) {
 }
 
 /** Returns a WAV file of `text` spoken, or null when there is nothing to say. */
-export async function speak(text) {
+export async function speak(text, name = PIPER_VOICE) {
   const line = speakable(text)
   if (!line) return null
-  await loadVoice()
-  const pcm = await slot(() => synthesizeRaw(line))
-  return wav(pcm, sampleRate)
+  const voice = await loadVoice(name)
+  const pcm = await slot(() => synthesizeRaw(voice, line))
+  return wav(pcm, voice.sampleRate)
 }

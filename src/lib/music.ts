@@ -24,6 +24,32 @@ type Cue = 'boot-music' | 'ambient' | 'work'
 type Track = {
   el: HTMLAudioElement
   fade: number | null
+  /** The track's level, when it plays through Web Audio. See mixer(). */
+  gain: GainNode | null
+}
+
+/**
+ * Levels go through Web Audio rather than `el.volume`, because on an iPhone
+ * `volume` is read-only: every cue played at full volume there, the ambient
+ * bed (meant at a tenth) included, and ducking did nothing — the music drowned
+ * the voice. A gain node works everywhere. Where Web Audio is unavailable the
+ * element's own volume is still used.
+ */
+let mixerCtx: AudioContext | null = null
+function mixer(): AudioContext | null {
+  try {
+    mixerCtx ??= new AudioContext()
+    if (mixerCtx.state === 'suspended') void mixerCtx.resume()
+    return mixerCtx
+  } catch {
+    return null
+  }
+}
+
+const getLevel = (t: Track) => (t.gain ? t.gain.gain.value : t.el.volume)
+function setLevel(t: Track, v: number) {
+  if (t.gain) t.gain.gain.value = v
+  else t.el.volume = v
 }
 
 const tracks = new Map<Cue, Track>()
@@ -110,7 +136,21 @@ function track(cue: Cue): Track | null {
       },
       { once: true },
     )
-    t = { el, fade: null }
+    let gain: GainNode | null = null
+    const ctx = mixer()
+    if (ctx) {
+      try {
+        gain = ctx.createGain()
+        gain.gain.value = 0
+        ctx.createMediaElementSource(el).connect(gain).connect(ctx.destination)
+        // The gain sets the level now; the element just plays at full.
+        el.volume = 1
+      } catch {
+        gain = null
+        el.volume = 0
+      }
+    }
+    t = { el, fade: null, gain }
     tracks.set(cue, t)
   }
   return t
@@ -119,6 +159,8 @@ function track(cue: Cue): Track | null {
 /** Must be called from a user gesture — browsers block audio before one. */
 export function enable() {
   enabled = true
+  // Inside the tap, so the mixer is allowed to start.
+  mixer()
   // Warm the files so the boot cue starts on time rather than after a buffer.
   ALL.forEach(track)
 }
@@ -137,11 +179,11 @@ function fadeTo(cue: Cue, to: number, ms: number) {
   const t = track(cue)
   if (!t) return
   if (t.fade !== null) cancelAnimationFrame(t.fade)
-  const from = t.el.volume
+  const from = getLevel(t)
   const start = performance.now()
   const step = () => {
     const k = Math.min(1, (performance.now() - start) / ms)
-    t.el.volume = from + (to - from) * k
+    setLevel(t, from + (to - from) * k)
     if (k < 1) t.fade = requestAnimationFrame(step)
     else {
       t.fade = null

@@ -385,6 +385,7 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_WHISPER` | on | `off` turns speech recognition off |
 | `JARVIS_WHISPER_PRELOAD` | on | `0` loads the model on first use instead of at startup |
 | `JARVIS_PIPER_VOICE` | `nl-rdh-medium` | The talk app's voice, made on this machine by Piper (also `nl-nathalie-x-low`, `nl-mls_5809-low`) |
+| `JARVIS_PIPER_VOICE_EN` | `en-gb-alan-low` | The full interface's fallback voice, in English, when the browser's own voice fails and there is no ElevenLabs key |
 | `JARVIS_PIPER_MODEL` | none | A Piper `.onnx` voice you downloaded yourself, used instead |
 | `JARVIS_PIPER` | on | `off` leaves the talk app on the phone's own voice |
 | `JARVIS_PIPER_PRELOAD` | on | `0` prepares the voice on first use instead of at startup |

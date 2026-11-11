@@ -24,7 +24,7 @@ import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { createPhoneLine, phoneConfig, startConversation } from './phone.mjs'
 import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } from './whisper.mjs'
-import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE } from './voice.mjs'
+import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE, PIPER_VOICE_EN } from './voice.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -1017,6 +1017,33 @@ const handleRequest = async (req, res) => {
 
   if (req.method === 'POST' && req.url === '/tts') {
     const key = elevenKey()
+    // Without ElevenLabs, the interface still asks here when the browser's own
+    // voice has proved broken — which on an iPhone it is. Piper answers, in
+    // English, so JARVIS is never silent.
+    if (!key && piperEnabled()) {
+      let body = ''
+      for await (const chunk of req) {
+        body += chunk
+        if (body.length > 64 * 1024) {
+          req.destroy()
+          res.writeHead(400, cors)
+          return res.end('body too large')
+        }
+      }
+      try {
+        const audio = await speak(String(JSON.parse(body || '{}').text ?? ''), PIPER_VOICE_EN)
+        if (!audio) {
+          res.writeHead(204, cors)
+          return res.end()
+        }
+        res.writeHead(200, { ...cors, 'content-type': 'audio/wav', 'content-length': audio.length })
+        return res.end(audio)
+      } catch (err) {
+        console.error('[jarvis] voice failed:', err?.message ?? err)
+        res.writeHead(503, cors)
+        return res.end('the voice is unavailable')
+      }
+    }
     if (!key) {
       res.writeHead(503, cors)
       return res.end('no elevenlabs key')
@@ -1361,7 +1388,11 @@ if (whisperEnabled() && process.env.JARVIS_WHISPER_PRELOAD !== '0') {
 
 if (piperEnabled() && process.env.JARVIS_PIPER_PRELOAD !== '0') {
   console.log(`[jarvis] preparing the voice (Piper, ${PIPER_VOICE}) — the first time downloads it`)
-  loadVoice().catch((err) => console.warn(`[jarvis] the voice could not load: ${err?.message ?? err}`))
+  loadVoice()
+    // The English one too, for the full interface — after the Dutch one, so
+    // the two downloads do not compete.
+    .then(() => (elevenKey() ? null : loadVoice(PIPER_VOICE_EN)))
+    .catch((err) => console.warn(`[jarvis] the voice could not load: ${err?.message ?? err}`))
 }
 
 for (const problem of PHONE.problems) console.warn(`[jarvis] phone: ${problem}`)
