@@ -8,7 +8,7 @@
  * is already ignored by git (`*.local`), so the bridge reads its own keys from
  * there too.
  *
- * Only its own keys: TWILIO_*, JARVIS_* and ELEVENLABS_API_KEY. The file also
+ * Only its own keys: TWILIO_*, TELEGRAM_*, JARVIS_* and ELEVENLABS_API_KEY. The file also
  * carries VITE_* settings meant for the browser, and nothing here needs them.
  * A variable already set in the shell wins, so a one-off override still works.
  *
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
 
 const FILE = fileURLToPath(new URL('../.env.local', import.meta.url))
-const OURS = /^(TWILIO_|JARVIS_|ELEVENLABS_API_KEY$)/
+const OURS = /^(TWILIO_|TELEGRAM_|JARVIS_|ELEVENLABS_API_KEY$)/
 
 /** Exported for the tests; returns the keys it would set. */
 export function bridgeEnv(text, env = process.env) {

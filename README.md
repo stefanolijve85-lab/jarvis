@@ -306,6 +306,27 @@ as your own user, with your Claude Code login and your `.env.local`. Use
 `systemctl --user restart jarvis` after an update, and
 `npm run service -- --remove` to stop for good.
 
+### Telegram — message him, send voice notes, and get called (free)
+
+A Telegram bot with his own name and picture. It is free and permanent, and
+nothing has to be reachable from the internet: the bridge fetches messages from
+Telegram itself.
+
+1. In Telegram, open **@BotFather** and send `/newbot`. Choose a name
+   (`Jarvis`) and a username ending in `bot`. BotFather replies with a
+   **token**. `/setuserpic` gives him a picture.
+2. Put the token in `.env.local` as `TELEGRAM_BOT_TOKEN=...`.
+3. For voice messages, install ffmpeg: `sudo apt install ffmpeg`.
+4. Restart JARVIS. The terminal (or `journalctl --user -u jarvis -f`) shows
+   `send: /start 123456`. Send exactly that to your bot. From then on it
+   answers only you. The link is kept in `~/.jarvis/telegram.json`.
+
+Write to him, or send a voice message: speech is recognised on your computer
+with Whisper, and he answers with a voice message in his own voice (ElevenLabs
+with a key, otherwise Piper) as well as the text. *"Call me in ten minutes"*
+sends a notification with a button that opens the talk app. *"Send me that"*
+messages you. Anyone else who finds the bot gets no answer.
+
 ### 2. Twilio — calls and WhatsApp
 
 1. Make an account at <https://www.twilio.com>. A trial account works for
@@ -404,6 +425,8 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `TWILIO_WHATSAPP_FROM` | `+14155238886` | The WhatsApp sender (the sandbox by default) |
 | `JARVIS_PHONE_PUBLIC_URL` | from Funnel | Where Twilio reaches the phone line; `npm run remote` fills it in |
 | `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
+| `TELEGRAM_BOT_TOKEN` | none | The bot's token from @BotFather; turns Telegram on |
+| `TELEGRAM_OWNER_ID` | from pairing | Your Telegram user id, instead of pairing with `/start <code>` |
 | `JARVIS_TALK_LANGUAGE` | `nl-NL` | Language the talk app listens and speaks in |
 | `JARVIS_WHISPER_MODEL` | `onnx-community/whisper-small` | Speech recognition model for the talk app |
 | `JARVIS_WHISPER` | on | `off` turns speech recognition off |

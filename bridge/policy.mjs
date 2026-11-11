@@ -158,6 +158,8 @@ export function decideTool(name, allowWrites = false) {
     // owner's own, fixed in JARVIS_OWNER_PHONE — and phone.mjs caps how many
     // calls and messages an hour can go out.
     if (server === 'jarvis_phone') return true
+    // Telegram, likewise: the bot only ever writes to its one linked owner.
+    if (server === 'jarvis_telegram') return true
 
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
