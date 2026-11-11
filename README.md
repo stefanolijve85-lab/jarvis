@@ -383,6 +383,7 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_DEBUG` | off | `1` logs every agent message to the bridge terminal, answer text and tool calls included |
 | `JARVIS_VOICE_ID` | none | ElevenLabs voice id |
 | `ELEVENLABS_API_KEY` | none | Optional; enables the ElevenLabs voice + Scribe |
+| `JARVIS_STT` | `elevenlabs` with a key | `browser` keeps the browser's own speech recognition while speaking with ElevenLabs |
 | `JARVIS_PUBLIC_ORIGIN` | none | Set by `npm run remote`: the Tailscale address the interface is opened from |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | none | Your Twilio account; turns the phone line on |
 | `JARVIS_OWNER_PHONE` | none | Your mobile, e.g. `+31612345678`: the only number JARVIS calls, messages or answers |

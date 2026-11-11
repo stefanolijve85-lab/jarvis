@@ -879,12 +879,16 @@ const handleRequest = async (req, res) => {
     // without one it falls back to the browser's own recogniser and voice, so a
     // student with nothing configured still has a working assistant.
     const eleven = Boolean(elevenKey())
+    // JARVIS_STT=browser keeps the browser's own recogniser while still
+    // speaking with ElevenLabs — for a key without the Speech to Text
+    // permission, or to save credits.
+    const scribe = eleven && process.env.JARVIS_STT !== 'browser'
     res.writeHead(200, { ...cors, 'content-type': 'application/json' })
     return res.end(
       JSON.stringify({
         ok: true,
         tts: eleven,
-        stt: eleven,
+        stt: scribe,
         // For the talk app: whether this machine transcribes, and in what.
         listen: whisperEnabled(),
         listenState: whisperState(),
@@ -1276,8 +1280,18 @@ const handleRequest = async (req, res) => {
         body: form,
       })
       if (!upstream.ok) {
+        const detail = await upstream.text()
+        // Said here, because the browser only shows "stt 401" in a panel a
+        // phone cannot open. The commonest cause is a key without the Speech
+        // to Text permission.
+        console.warn(
+          `[jarvis] ElevenLabs speech-to-text refused (${upstream.status}): ${detail.slice(0, 200)}` +
+            (upstream.status === 401 || upstream.status === 403
+              ? ' — give the API key the Speech to Text permission, or set JARVIS_STT=browser'
+              : ''),
+        )
         res.writeHead(upstream.status, cors)
-        return res.end(await upstream.text())
+        return res.end(detail)
       }
       const data = await upstream.json()
       res.writeHead(200, { ...cors, 'content-type': 'application/json' })
