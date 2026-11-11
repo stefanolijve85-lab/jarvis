@@ -284,7 +284,8 @@ export function createTelegram(cfg, converse, voice) {
           console.error('[jarvis] telegram: the bot token was refused — check TELEGRAM_BOT_TOKEN')
           return
         }
-        console.warn(`[jarvis] telegram: ${err.message} — retrying`)
+        const cause = err.cause?.code || err.cause?.message || ''
+        console.warn(`[jarvis] telegram: ${err.message}${cause ? ` (${cause})` : ''} — retrying`)
         await new Promise((r) => setTimeout(r, delay))
         delay = Math.min(delay * 2, 60_000)
       }
@@ -374,13 +375,27 @@ export function createTelegram(cfg, converse, voice) {
   }
 
   async function start() {
-    try {
-      const me = await call('getMe')
-      botName = me.username ?? ''
-    } catch (err) {
-      console.error(`[jarvis] telegram: ${err.message} — check TELEGRAM_BOT_TOKEN`)
-      return
+    // A refused token is final. Anything else — no network yet at boot, a DNS
+    // hiccup, Telegram briefly away — is retried, with the real cause logged.
+    for (let delay = 2000; !stopped; delay = Math.min(delay * 2, 60_000)) {
+      try {
+        const me = await call('getMe')
+        botName = me.username ?? ''
+        break
+      } catch (err) {
+        if (/unauthorized|not found/i.test(err.message)) {
+          console.error('[jarvis] telegram: the bot token was refused — check TELEGRAM_BOT_TOKEN')
+          return
+        }
+        const cause = err.cause?.code || err.cause?.message || ''
+        console.warn(
+          `[jarvis] telegram: cannot reach Telegram (${err.message}${cause ? `: ${cause}` : ''})` +
+            ` — retrying in ${delay / 1000}s`,
+        )
+        await new Promise((r) => setTimeout(r, delay))
+      }
     }
+    if (stopped) return
     if (owner) {
       console.log(`[jarvis] telegram: @${botName} is listening for you`)
     } else {
