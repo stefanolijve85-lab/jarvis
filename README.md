@@ -317,6 +317,13 @@ need again. The notes are a plain file you can read and edit,
 handed to the model as information, never as instructions. `JARVIS_MEMORY=off`
 turns memory off.
 
+He also remembers the conversation itself. Every exchange, on any surface, is
+kept in `~/.jarvis/history.jsonl` (the last 400). The most recent ones, from
+the past two weeks, are handed to each new session. So closing the app on your
+phone and opening it again, or carrying on in Telegram what you started in the
+interface, picks up where you were. Only your words and his answers are kept,
+not the pages or mails he read. `JARVIS_HISTORY=off` turns it off.
+
 ### Mail, calendar, content: your claude.ai connectors
 
 Connectors you add to your claude.ai account (Gmail, Google Calendar, Google

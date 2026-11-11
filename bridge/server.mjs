@@ -26,7 +26,7 @@ import { createPhoneLine, phoneConfig, startConversation } from './phone.mjs'
 import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } from './whisper.mjs'
 import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE, PIPER_VOICE_EN } from './voice.mjs'
 import { createTelegram, ffmpeg, hasFfmpeg, telegramConfig } from './telegram.mjs'
-import { memoryEnabled, memoryPrompt, memoryServer } from './memory.mjs'
+import { appendExchange, historyPrompt, memoryEnabled, memoryPrompt, memoryServer } from './memory.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -618,8 +618,10 @@ function channelPrompt(channel, context) {
  * thread — as its own agent session, with the same options as the browser's
  * minus the screen.
  */
-const converse = ({ channel, context, endCall, onText, onDone, onFail }) =>
-  startConversation({
+const converse = ({ channel, context, endCall, onText, onDone, onFail }) => {
+  // What was last said to this conversation, so its answer can be kept with it.
+  let lastSaid = ''
+  const conversation = startConversation({
     query,
     options: agentOptions({
       systemPrompt: channelPrompt(channel, context),
@@ -632,9 +634,21 @@ const converse = ({ channel, context, endCall, onText, onDone, onFail }) =>
       },
     }),
     onText,
-    onDone,
+    onDone: (text) => {
+      if (lastSaid) appendExchange({ channel, user: lastSaid, jarvis: text })
+      lastSaid = ''
+      onDone(text)
+    },
     onFail,
   })
+  return {
+    ...conversation,
+    say(text) {
+      lastSaid = text
+      conversation.say(text)
+    },
+  }
+}
 
 const phoneLine = createPhoneLine(PHONE, converse)
 
@@ -1573,7 +1587,8 @@ function agentOptions({ mcpServers, systemPrompt, maxTurns = 24 }) {
     // tuned for a coding agent — verbose, file-oriented, and a large chunk
     // of input tokens on every turn. Replacing it makes the persona stick,
     // keeps answers short enough to speak, and cuts cost per turn.
-    systemPrompt: systemPrompt + (ALLOW_WRITES ? PROMPT_CONFIRM : '') + memoryPrompt(),
+    systemPrompt:
+      systemPrompt + (ALLOW_WRITES ? PROMPT_CONFIRM : '') + memoryPrompt() + historyPrompt(),
     // Run from JARVIS's own workspace rather than the home directory. MCP
     // discovery does not depend on it — settingSources is empty and the
     // servers are passed in explicitly above — and file tools resolve
@@ -1796,6 +1811,9 @@ wss.on('connection', (socket, req) => {
    */
   let cancelledAsk = null
 
+  /** The question being answered, kept with its answer in the history. */
+  let lastAsked = ''
+
   const turnFinished = () =>
     new Promise((resolve) => {
       finishTurn = resolve
@@ -1952,6 +1970,12 @@ wss.on('connection', (socket, req) => {
                 text: msg.result ?? '',
                 costUsd: msg.total_cost_usd ?? null,
               })
+              // Kept, so the next conversation — here, on the phone or on
+              // Telegram — knows what was said in this one.
+              if (lastAsked) {
+                appendExchange({ channel: talk ? 'talk' : 'interface', user: lastAsked, jarvis: msg.result ?? '' })
+                lastAsked = ''
+              }
             } else if (cancelledAsk !== null && cancelledAsk === answering) {
               // Cancelled on purpose. The client bumps its turn counter before
               // interrupting, so it is already discarding anything tagged with
@@ -2033,6 +2057,7 @@ wss.on('connection', (socket, req) => {
       const id = typeof msg.id === 'string' ? msg.id : null
       void settling.then(() => {
         answering = id
+        lastAsked = text
         if (deliver) {
           const resolve = deliver
           deliver = null

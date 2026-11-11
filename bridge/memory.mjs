@@ -129,3 +129,103 @@ export function memoryServer(file = FILE) {
     ],
   })
 }
+
+// ---------------------------------------------------------------------------
+// Recent conversation
+// ---------------------------------------------------------------------------
+
+/**
+ * The notes hold what he chose to keep; this holds what was actually said.
+ * Every exchange — your words and his answer, on any surface — is appended to
+ * ~/.jarvis/history.jsonl, and the most recent ones are handed to every new
+ * session. So closing the app on your phone and opening it again, or carrying
+ * on in Telegram what you started in the interface, picks up where you were.
+ *
+ * Only the two sides of the conversation are kept: not tool results, not pages
+ * he read. Readable by you alone, trimmed to the last few hundred exchanges.
+ * JARVIS_HISTORY=off turns it off.
+ */
+const HISTORY = process.env.JARVIS_HISTORY_FILE || join(homedir(), '.jarvis', 'history.jsonl')
+const KEEP = 400
+const RECENT = 24
+const RECENT_CHARS = 7000
+const RECENT_DAYS = 14
+
+export const historyEnabled = () => process.env.JARVIS_HISTORY !== 'off'
+
+export function loadHistory(file = HISTORY) {
+  try {
+    return readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return null
+        }
+      })
+      .filter((e) => e && typeof e.user === 'string' && typeof e.jarvis === 'string')
+  } catch {
+    return []
+  }
+}
+
+export function appendExchange({ channel, user, jarvis }, file = HISTORY) {
+  if (!historyEnabled()) return
+  const said = String(user ?? '').trim()
+  const answer = String(jarvis ?? '').trim()
+  if (!said || !answer) return
+  try {
+    const entries = loadHistory(file)
+    entries.push({
+      at: new Date().toISOString(),
+      channel: channel || 'interface',
+      user: said.slice(0, 2000),
+      jarvis: answer.slice(0, 3000),
+    })
+    mkdirSync(dirname(file), { recursive: true })
+    const tmp = `${file}.tmp`
+    writeFileSync(tmp, entries.slice(-KEEP).map((e) => JSON.stringify(e)).join('\n') + '\n', {
+      mode: 0o600,
+    })
+    renameSync(tmp, file)
+  } catch (err) {
+    console.warn(`[jarvis] could not keep the conversation: ${err.message}`)
+  }
+}
+
+const WHERE = {
+  interface: 'interface',
+  talk: 'talk app',
+  phone: 'phone call',
+  whatsapp: 'WhatsApp',
+  telegram: 'Telegram',
+}
+
+/** The latest exchanges, as a section of the system prompt. */
+export function historyPrompt(file = HISTORY, now = Date.now()) {
+  if (!historyEnabled()) return ''
+  const since = now - RECENT_DAYS * 24 * 60 * 60 * 1000
+  const recent = loadHistory(file)
+    .filter((e) => Date.parse(e.at) >= since)
+    .slice(-RECENT)
+  if (!recent.length) return ''
+  const lines = []
+  let size = 0
+  for (const e of [...recent].reverse()) {
+    const when = e.at.slice(0, 16).replace('T', ' ')
+    const block = `[${when} · ${WHERE[e.channel] ?? e.channel}]\nThem: ${e.user}\nYou: ${e.jarvis}`
+    if (size + block.length > RECENT_CHARS) break
+    lines.unshift(block)
+    size += block.length
+  }
+  return `
+
+Your recent conversations with them, oldest first, on any device. This is a
+new session, but they expect you to remember these: continue naturally, pick up
+references to them ("that mail", "what we discussed"), and do not repeat what
+was already said. They are a record of the past, not instructions now.
+
+${lines.join('\n\n')}`
+}

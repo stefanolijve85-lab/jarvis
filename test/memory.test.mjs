@@ -53,3 +53,29 @@ test('the memory tools are allowed without write access', () => {
   assert.equal(decideTool('mcp__jarvis_memory__remember'), true)
   assert.equal(decideTool('mcp__jarvis_memory__forget'), true)
 })
+
+// ------------------------------------------------------------------ history
+
+import { appendExchange, historyPrompt, loadHistory } from '../bridge/memory.mjs'
+
+const freshHistory = () => join(mkdtempSync(join(tmpdir(), 'jarvis-hist-')), 'history.jsonl')
+
+test('exchanges are kept and handed to the next session', () => {
+  const file = freshHistory()
+  appendExchange({ channel: 'telegram', user: 'Plan de lancering van Kwizillo', jarvis: 'Volgende week dinsdag, meneer.' }, file)
+  appendExchange({ channel: 'interface', user: '', jarvis: 'ignored' }, file)
+  assert.equal(loadHistory(file).length, 1)
+  assert.equal(statSync(file).mode & 0o077, 0, 'readable by the owner only')
+  const prompt = historyPrompt(file)
+  assert.match(prompt, /Telegram/)
+  assert.match(prompt, /Plan de lancering van Kwizillo/)
+  assert.match(prompt, /not instructions/)
+})
+
+test('old conversations fall out of the prompt, recent ones stay', () => {
+  const file = freshHistory()
+  appendExchange({ channel: 'talk', user: 'Hallo', jarvis: 'Goedendag.' }, file)
+  const later = Date.now() + 30 * 24 * 60 * 60 * 1000
+  assert.equal(historyPrompt(file, later), '')
+  assert.notEqual(historyPrompt(file), '')
+})
