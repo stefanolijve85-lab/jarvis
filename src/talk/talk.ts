@@ -143,7 +143,7 @@ function interrupt() {
     socket.send(JSON.stringify({ type: 'interrupt' }))
   }
   current = null
-  speech.cancel()
+  stopSpeaking()
 }
 
 // ---------------------------------------------------------------- the mouth
@@ -207,7 +207,11 @@ function unlockSpeech() {
 /** Said once, if the phone never actually starts speaking. */
 let warnedSilent = false
 
-function say(sentence: string) {
+/**
+ * The phone's own voice: only the fallback now, for when the computer cannot
+ * make one. On an iPhone in Chrome it is often simply silent.
+ */
+function sayWithPhone(sentence: string) {
   const text = sentence.trim()
   if (!text || !speech) return
   const u = new SpeechSynthesisUtterance(text)
@@ -249,6 +253,107 @@ function say(sentence: string) {
   speech.speak(u)
 }
 
+/**
+ * The voice made on the computer (Piper, through /speak), played through Web
+ * Audio — the path the diagnostics show working on an iPhone even when speech
+ * synthesis is not. Each sentence is requested the moment it is complete, so
+ * the next one is being made while this one plays; they are played strictly in
+ * order. `null` until the bridge has said whether it can.
+ */
+let serverVoice: boolean | null = null
+let generation = 0
+let chain: Promise<void> = Promise.resolve()
+let playing: AudioBufferSourceNode | null = null
+
+/** The page's one audio context, created and woken inside a tap. */
+function ensureAudio(): AudioContext {
+  audio ??= new AudioContext()
+  void audio.resume().catch(() => {})
+  return audio
+}
+
+/** iOS only lets a page make sound after it has made some inside a tap. */
+let audioUnlocked = false
+function unlockAudio() {
+  const ctx = ensureAudio()
+  if (audioUnlocked) return
+  audioUnlocked = true
+  const source = ctx.createBufferSource()
+  source.buffer = ctx.createBuffer(1, 1, 22050)
+  source.connect(ctx.destination)
+  source.start()
+}
+
+function say(sentence: string) {
+  const text = sentence.trim()
+  if (!text) return
+  if (serverVoice === false) return sayWithPhone(text)
+  const gen = generation
+  const ctx = ensureAudio()
+  queued++
+  if (phase === 'thinking') setPhase('speaking')
+  audioSession('playback')
+
+  const clip = fetch(`${BRIDGE_HTTP_URL}/speak`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+  }).then(async (res) => {
+    if (res.status === 204) return null
+    if (!res.ok) throw new Error(String(res.status))
+    return ctx.decodeAudioData(await res.arrayBuffer())
+  })
+
+  chain = chain
+    .then(async () => {
+      if (gen !== generation) return
+      let buffer: AudioBuffer | null
+      try {
+        buffer = await clip
+      } catch {
+        // The computer could not make the voice. Fall back to the phone's own
+        // for the rest of this visit rather than go quiet.
+        if (gen !== generation) return
+        serverVoice = false
+        sayWithPhone(text)
+        return
+      }
+      if (gen !== generation || !buffer) return
+      await ctx.resume().catch(() => {})
+      await new Promise<void>((resolve) => {
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.connect(ctx.destination)
+        source.onended = () => resolve()
+        playing = source
+        source.start()
+        // In case 'ended' never comes — a suspended context, a stopped source.
+        setTimeout(resolve, buffer.duration * 1000 + 1500)
+      })
+      if (playing && gen === generation) playing = null
+    })
+    .catch(() => {})
+    .then(() => {
+      if (gen !== generation) return
+      queued = Math.max(0, queued - 1)
+      maybeDoneSpeaking()
+    })
+}
+
+/** Silences him at once: what is playing, what is queued, both voices. */
+function stopSpeaking() {
+  generation++
+  try {
+    playing?.stop()
+  } catch {
+    /* already stopped */
+  }
+  playing = null
+  chain = Promise.resolve()
+  queued = 0
+  speech?.cancel()
+}
+
 /** Speaks every complete sentence in what has arrived so far. */
 function flushSentences(final: boolean) {
   const re = /[^.!?…\n]+[.!?…]+["')\]]*\s+|[^\n]+\n+/g
@@ -288,8 +393,7 @@ function onFailed(message: string) {
   current = null
   turnDone = true
   bubble('note', message)
-  speech?.cancel()
-  queued = 0
+  stopSpeaking()
   inCall = false
   setPhase('idle')
 }
@@ -335,8 +439,7 @@ async function listen() {
   let stream: MediaStream
   try {
     audioSession('play-and-record')
-    audio ??= new AudioContext()
-    await audio.resume()
+    await ensureAudio().resume()
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     })
@@ -353,7 +456,7 @@ async function listen() {
     return
   }
 
-  const ctx = audio
+  const ctx = ensureAudio()
   const source = ctx.createMediaStreamSource(stream)
   // ScriptProcessor is deprecated, and still the one thing every browser —
   // Safari included — runs without a separate worklet file.
@@ -482,6 +585,7 @@ async function transcribeAndAsk(samples: Float32Array) {
 
 orb.addEventListener('click', () => {
   audioSession('playback')
+  unlockAudio()
   unlockSpeech()
   if (phase === 'listening' || phase === 'hearing') {
     // Tapping while he listens: send what you have said, or hang up if
@@ -512,6 +616,8 @@ orb.addEventListener('click', () => {
 
 typeForm.addEventListener('submit', (event) => {
   event.preventDefault()
+  audioSession('playback')
+  unlockAudio()
   unlockSpeech()
   const text = textInput.value.trim()
   if (!text) return
@@ -524,20 +630,25 @@ typeForm.addEventListener('submit', (event) => {
 
 // ------------------------------------------------------------------- start
 
-/** The first start downloads the speech model; say when it is there. */
-async function waitForEars(note: HTMLElement) {
+/** The first start downloads models; say when they are there. */
+async function waitFor(
+  key: 'listenState' | 'speakState',
+  note: HTMLElement,
+  readyText: string,
+  failedText: string,
+) {
   for (;;) {
     await new Promise((r) => setTimeout(r, 5000))
     try {
       const res = await fetch(`${BRIDGE_HTTP_URL}/health`)
-      const { listenState } = (await res.json()) as { listenState?: string }
-      if (listenState === 'ready') {
-        note.textContent = 'Spraakherkenning is klaar. Tik op de knop en praat.'
+      const state = ((await res.json()) as Record<string, unknown>)[key]
+      if (state === 'ready') {
+        note.textContent = readyText
         return
       }
-      if (listenState === 'failed') {
-        note.textContent =
-          'Spraakherkenning kon niet laden. Kijk in het terminalvenster van Jarvis. Typen werkt wel.'
+      if (state === 'failed') {
+        note.textContent = failedText
+        if (key === 'speakState') serverVoice = false
         return
       }
     } catch {
@@ -554,6 +665,17 @@ async function boot() {
       language?: string
       listen?: boolean
       listenState?: string
+      speak?: boolean
+      speakState?: string
+    }
+    serverVoice = health.speak !== false && health.speakState !== 'failed'
+    if (health.speakState === 'loading') {
+      void waitFor(
+        'speakState',
+        bubble('note', 'Zijn stem wordt klaargezet — de eerste keer duurt dat een minuut…'),
+        'Zijn stem is klaar.',
+        'Zijn stem kon niet laden op je computer; je telefoon spreekt nu voor hem.',
+      )
     }
     if (health.language) {
       language = health.language
@@ -563,7 +685,12 @@ async function boot() {
     if (health.listen === false) {
       bubble('note', 'Spraakherkenning staat uit op je computer. Typen werkt wel.')
     } else if (health.listenState === 'loading') {
-      void waitForEars(bubble('note', 'Spraakherkenning wordt geladen — de eerste keer duurt dat een paar minuten…'))
+      void waitFor(
+        'listenState',
+        bubble('note', 'Spraakherkenning wordt geladen — de eerste keer duurt dat een paar minuten…'),
+        'Spraakherkenning is klaar. Tik op de knop en praat.',
+        'Spraakherkenning kon niet laden. Kijk in het terminalvenster van Jarvis. Typen werkt wel.',
+      )
     }
   } catch {
     /* the socket reports the connection state */

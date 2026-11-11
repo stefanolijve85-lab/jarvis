@@ -269,8 +269,12 @@ as well. In Safari, *Share → Add to Home Screen* makes it an app of its own.
   transformers.js) turns it into text. Nothing goes to a speech service and
   nothing costs per minute. The model downloads once, on first start, into
   `~/.jarvis/models`. That is a few hundred MB for `whisper-small`.
-- **Speaking** uses the phone's own voice. On an iPhone, turn the silent switch
-  off.
+- **Speaking also happens on your own computer.** [Piper](https://github.com/rhasspy/piper)
+  makes his voice, and the phone plays it as audio through `/speak`. A phone's
+  own speech synthesis cannot be relied on: in Chrome on an iPhone it is often
+  silent. Piper and a Dutch voice (`nl-rdh-medium`) download once into
+  `~/.jarvis/piper`, about 80 MB. If they cannot load, the phone's own voice
+  takes over.
 - It is the same agent, with no screen tools: the socket connects with
   `?mode=talk`.
 
@@ -380,6 +384,10 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_WHISPER_MODEL` | `onnx-community/whisper-small` | Speech recognition model for the talk app |
 | `JARVIS_WHISPER` | on | `off` turns speech recognition off |
 | `JARVIS_WHISPER_PRELOAD` | on | `0` loads the model on first use instead of at startup |
+| `JARVIS_PIPER_VOICE` | `nl-rdh-medium` | The talk app's voice, made on this machine by Piper (also `nl-nathalie-x-low`, `nl-mls_5809-low`) |
+| `JARVIS_PIPER_MODEL` | none | A Piper `.onnx` voice you downloaded yourself, used instead |
+| `JARVIS_PIPER` | on | `off` leaves the talk app on the phone's own voice |
+| `JARVIS_PIPER_PRELOAD` | on | `0` prepares the voice on first use instead of at startup |
 | `JARVIS_PHONE_LANGUAGE` | `nl-NL` | Language callers are heard and answered in |
 | `JARVIS_PHONE_GREETING` | `Ja, meneer?` | What he says when he picks up |
 | `JARVIS_PHONE_TTS_PROVIDER`, `JARVIS_PHONE_VOICE` | Twilio's default | Text-to-speech on calls |

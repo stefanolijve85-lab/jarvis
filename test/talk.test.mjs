@@ -22,6 +22,7 @@ function startBridge(env = {}) {
       ...process.env,
       JARVIS_BRIDGE_PORT: '0',
       JARVIS_WHISPER_PRELOAD: '0',
+      JARVIS_PIPER_PRELOAD: '0',
       JARVIS_SKIP_ENV_FILE: '1',
       ...env,
     },

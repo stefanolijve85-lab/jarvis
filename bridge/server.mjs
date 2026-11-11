@@ -24,6 +24,7 @@ import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { createPhoneLine, phoneConfig, startConversation } from './phone.mjs'
 import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } from './whisper.mjs'
+import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE } from './voice.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -887,6 +888,9 @@ const handleRequest = async (req, res) => {
         // For the talk app: whether this machine transcribes, and in what.
         listen: whisperEnabled(),
         listenState: whisperState(),
+        // And whether this machine makes JARVIS's voice (Piper).
+        speak: piperEnabled(),
+        speakState: voiceState(),
         language: TALK_LANGUAGE,
       }),
     )
@@ -1144,6 +1148,49 @@ const handleRequest = async (req, res) => {
     }
   }
 
+  // Text to speech on this machine, for the talk app: Piper, returned as a
+  // WAV file, because a phone's own speech synthesis cannot be relied on.
+  if (req.method === 'POST' && req.url === '/speak') {
+    if (!piperEnabled()) {
+      res.writeHead(503, cors)
+      return res.end('the voice is switched off')
+    }
+    let body = ''
+    for await (const chunk of req) {
+      body += chunk
+      if (body.length > 16_384) {
+        req.destroy()
+        res.writeHead(413, cors)
+        return res.end('too long')
+      }
+    }
+    let text = ''
+    try {
+      text = String(JSON.parse(body).text ?? '')
+    } catch {
+      res.writeHead(400, cors)
+      return res.end('send {"text": "..."}')
+    }
+    try {
+      const audio = await speak(text)
+      if (!audio) {
+        res.writeHead(204, cors)
+        return res.end()
+      }
+      res.writeHead(200, {
+        ...cors,
+        'content-type': 'audio/wav',
+        'content-length': audio.length,
+        'cache-control': 'no-store',
+      })
+      return res.end(audio)
+    } catch (err) {
+      console.error('[jarvis] voice failed:', err?.message ?? err)
+      res.writeHead(503, cors)
+      return res.end('the voice is unavailable')
+    }
+  }
+
   if (req.method === 'POST' && req.url === '/stt') {
     const key = elevenKey()
     if (!key) {
@@ -1310,6 +1357,11 @@ if (whisperEnabled() && process.env.JARVIS_WHISPER_PRELOAD !== '0') {
   loadWhisper().catch((err) =>
     console.warn(`[jarvis] speech recognition could not load: ${err?.message ?? err}`),
   )
+}
+
+if (piperEnabled() && process.env.JARVIS_PIPER_PRELOAD !== '0') {
+  console.log(`[jarvis] preparing the voice (Piper, ${PIPER_VOICE}) — the first time downloads it`)
+  loadVoice().catch((err) => console.warn(`[jarvis] the voice could not load: ${err?.message ?? err}`))
 }
 
 for (const problem of PHONE.problems) console.warn(`[jarvis] phone: ${problem}`)
