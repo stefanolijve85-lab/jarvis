@@ -260,6 +260,15 @@ export function startAmbient() {
   set('ambient', LEVEL.ambient, 900)
 }
 
+/** The boot sequence was skipped: let the start-up music go quickly. */
+export function cutBoot() {
+  if (dissolve) {
+    clearTimeout(dissolve)
+    dissolve = null
+  }
+  if (tracks.has('boot-music')) set('boot-music', 0, 700)
+}
+
 export function stopAll() {
   if (dissolve) {
     clearTimeout(dissolve)

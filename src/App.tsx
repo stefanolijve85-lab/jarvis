@@ -9,6 +9,7 @@ import { startVoice, type Voice, type VoiceMode } from './lib/voice'
 import { createSpeaker, cycleVoice, currentVoiceName, unlockSpeechOutput } from './lib/tts'
 import * as sfx from './lib/sfx'
 import * as music from './lib/music'
+import { bootSkipped } from './lib/bootSkip'
 import * as hands from './lib/hands'
 import { listenForClap } from './lib/clap'
 import * as camera from './lib/camera'
@@ -494,7 +495,12 @@ export default function App() {
     // status bar, rings, suit schematic, reactor power-up — before the live
     // interface takes over. Kept a touch under the boot cue so the music is
     // still rising as the reactor lands.
-    await new Promise((r) => setTimeout(r, 9200)) // boot sequence
+    // The skip button (or Escape) ends the wait at once and cuts the start-up
+    // music short, rather than leaving it playing under the live interface.
+    await Promise.race([
+      new Promise((r) => setTimeout(r, 9200)), // boot sequence
+      bootSkipped().then(() => music.cutBoot()),
+    ])
     await warming
     store.getState().setConnected(connectedLabels())
 
