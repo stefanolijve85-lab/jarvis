@@ -260,9 +260,19 @@ stutters, and an iPhone has no reliable speech recognition for it to use. The
 talk app is the light alternative: a single button, made for talking.
 
 Open **`https://your-machine.your-tailnet.ts.net/talk`** on your phone, with
-Tailscale on. Tap once and talk. JARVIS listens until you stop, answers out
-loud, and then listens again, like a call. Tap again to hang up. You can type
-as well. In Safari, *Share → Add to Home Screen* makes it an app of its own.
+Tailscale on. Tap the reactor once and talk: JARVIS listens until you stop,
+answers out loud, and listens again, for as long as the conversation lasts.
+Pauses do not end it. **Hang up** does, or five minutes of silence. Tap the
+reactor while he speaks to interrupt. With **Wake word** on, he answers only
+what mentions "Jarvis", plus follow-ups within half a minute of his last
+answer, so a television in the room is left alone. You can type as well. In
+Safari, *Share → Add to Home Screen* makes it an app of its own. The reactor is
+drawn in 2D, so it stays light.
+
+With an ElevenLabs key (`ELEVENLABS_API_KEY` in `.env.local`), both the talk
+app and the full interface speak with the ElevenLabs voice instead (George, a
+British male, by default). Its model is multilingual, so it speaks Dutch
+too.
 
 - **Hearing happens on your own computer.** The phone records the raw audio
   and sends it to the bridge's `/listen`, where Whisper (through

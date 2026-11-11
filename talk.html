@@ -12,9 +12,10 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <!--
-      The talk app: JARVIS on a phone, without the 3D interface. Nothing here is
-      fetched from anywhere but this server — the page itself, the bridge (on
-      localhost, or through /bridge from another device) and Vite's socket.
+      The talk app: JARVIS on a phone. The reactor is drawn on a 2D canvas
+      rather than the full interface's 3D scene, which is what keeps it smooth
+      on a phone. Nothing is fetched from anywhere but this server, the
+      bridge, and the interface's own typeface from Google Fonts.
     -->
     <meta
       http-equiv="Content-Security-Policy"
@@ -25,40 +26,62 @@
         frame-src 'none';
         img-src 'self' data:;
         script-src 'self';
-        style-src 'self' 'unsafe-inline';
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src 'self' https://fonts.gstatic.com;
         connect-src 'self' ws: wss: http://localhost:8787 http://127.0.0.1:8787;
         media-src 'self' blob:;
       "
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;600&family=JetBrains+Mono:wght@300;400&display=swap"
+    />
     <title>Jarvis</title>
   </head>
-  <body>
+  <body data-phase="idle" data-call="off">
+    <div class="frame" aria-hidden="true">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+    </div>
+
     <main class="talk">
       <header class="top">
-        <div class="brand">J.A.R.V.I.S.</div>
+        <div>
+          <div class="brand">J.A.R.V.I.S.</div>
+          <div class="sub">Just a rather very intelligent system</div>
+        </div>
         <div class="link" id="link" title="Verbinding">
           <span class="dot"></span><span id="link-text">verbinden…</span>
         </div>
       </header>
 
+      <section class="stage">
+        <button class="reactor" id="orb" type="button" aria-label="Start gesprek">
+          <canvas id="reactor"></canvas>
+        </button>
+        <div class="status" id="status" aria-live="polite">Tik op de reactor</div>
+      </section>
+
       <section class="log" id="log" aria-live="polite">
         <p class="hint" id="hint">
-          Tik op de knop en praat. Jarvis luistert tot je stil bent, antwoordt hardop en
-          luistert daarna weer — net als bellen. Tik nog eens om op te hangen.
+          Tik één keer op de reactor. Jarvis blijft luisteren en antwoorden tot je ophangt.
         </p>
       </section>
 
-      <section class="controls">
-        <div class="status" id="status">Tik om te praten</div>
-        <button class="orb" id="orb" type="button" aria-label="Praten">
-          <span class="ring"></span>
-          <span class="core"></span>
-        </button>
+      <footer class="controls">
+        <div class="row">
+          <button class="chip" id="wake" type="button" aria-pressed="false">
+            Wekwoord: uit
+          </button>
+          <button class="hangup" id="hangup" type="button" aria-label="Ophangen">Ophangen</button>
+        </div>
         <form class="type" id="type">
           <input id="text" type="text" placeholder="Of typ een bericht…" autocomplete="off" />
           <button type="submit" aria-label="Versturen">➤</button>
         </form>
-      </section>
+      </footer>
     </main>
     <script type="module" src="/src/talk/talk.ts"></script>
   </body>

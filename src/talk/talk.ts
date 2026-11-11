@@ -24,6 +24,7 @@
  */
 
 import { BRIDGE_HTTP_URL, BRIDGE_WS_URL } from '../config'
+import { createReactor } from './reactor'
 import './talk.css'
 
 // ------------------------------------------------------------------- the page
@@ -37,6 +38,9 @@ const linkEl = $<HTMLElement>('link')
 const linkText = $<HTMLElement>('link-text')
 const typeForm = $<HTMLFormElement>('type')
 const textInput = $<HTMLInputElement>('text')
+const hangupBtn = $<HTMLButtonElement>('hangup')
+const wakeBtn = $<HTMLButtonElement>('wake')
+const reactor = createReactor($<HTMLCanvasElement>('reactor'))
 
 type Phase = 'idle' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 let phase: Phase = 'idle'
@@ -45,19 +49,41 @@ let inCall = false
 let language = 'nl-NL'
 
 const LABELS: Record<Phase, string> = {
-  idle: 'Tik om te praten',
-  listening: 'Ik luister…',
-  hearing: 'Ik luister…',
-  thinking: 'Even denken…',
-  speaking: 'Tik om te onderbreken',
+  idle: 'Tik op de reactor',
+  listening: 'Luistert',
+  hearing: 'Luistert',
+  thinking: 'Denkt na',
+  speaking: 'Spreekt · tik om te onderbreken',
 }
 
 function setPhase(next: Phase, label?: string) {
   phase = next
   document.body.dataset.phase = next
   document.body.dataset.call = inCall ? 'on' : 'off'
-  statusEl.textContent = label ?? (next === 'idle' && inCall ? 'Tik om op te hangen' : LABELS[next])
+  reactor.setMood(next)
+  if (next === 'idle' || next === 'thinking') reactor.setLevel(0)
+  statusEl.textContent =
+    label ?? (next === 'idle' && inCall ? 'Tik op de reactor om verder te praten' : LABELS[next])
 }
+
+/**
+ * Wake word. Off: in a conversation everything you say goes to him. On: only
+ * what mentions "Jarvis" does — or anything within half a minute of his last
+ * answer, so a follow-up does not need it — which keeps a television or a
+ * conversation in the room from being answered.
+ */
+let wakeWord = false
+let lastAnswerAt = 0
+try {
+  wakeWord = localStorage.getItem('jarvis-wake') === 'on'
+} catch {
+  /* private browsing */
+}
+function showWake() {
+  wakeBtn.setAttribute('aria-pressed', String(wakeWord))
+  wakeBtn.textContent = `Wekwoord: ${wakeWord ? 'aan' : 'uit'}`
+}
+showWake()
 
 function bubble(who: 'me' | 'him' | 'note', text: string) {
   hint.remove()
@@ -261,6 +287,8 @@ function sayWithPhone(sentence: string) {
  * order. `null` until the bridge has said whether it can.
  */
 let serverVoice: boolean | null = null
+/** With an ElevenLabs key on the computer, his voice comes from there instead. */
+let elevenVoice = false
 let generation = 0
 let chain: Promise<void> = Promise.resolve()
 let playing: AudioBufferSourceNode | null = null
@@ -294,7 +322,7 @@ function say(sentence: string) {
   if (phase === 'thinking') setPhase('speaking')
   audioSession('playback')
 
-  const clip = fetch(`${BRIDGE_HTTP_URL}/speak`, {
+  const clip = fetch(`${BRIDGE_HTTP_URL}${elevenVoice ? '/tts' : '/speak'}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -323,8 +351,26 @@ function say(sentence: string) {
       await new Promise<void>((resolve) => {
         const source = ctx.createBufferSource()
         source.buffer = buffer
-        source.connect(ctx.destination)
-        source.onended = () => resolve()
+        const meter = ctx.createAnalyser()
+        meter.fftSize = 512
+        source.connect(meter)
+        meter.connect(ctx.destination)
+        // The reactor breathes with his voice.
+        const bins = new Uint8Array(meter.fftSize)
+        let raf = 0
+        const tick = () => {
+          meter.getByteTimeDomainData(bins)
+          let sum = 0
+          for (const b of bins) sum += ((b - 128) / 128) ** 2
+          reactor.setLevel(Math.min(1, Math.sqrt(sum / bins.length) * 5))
+          raf = requestAnimationFrame(tick)
+        }
+        tick()
+        source.onended = () => {
+          cancelAnimationFrame(raf)
+          reactor.setLevel(0)
+          resolve()
+        }
         playing = source
         source.start()
         // In case 'ended' never comes — a suspended context, a stopped source.
@@ -385,6 +431,7 @@ function onDone(text: string) {
   }
   turnDone = true
   current = null
+  lastAnswerAt = Date.now()
   flushSentences(true)
   maybeDoneSpeaking()
 }
@@ -434,7 +481,7 @@ function downsample(input: Float32Array, from: number): Float32Array {
   return out
 }
 
-async function listen() {
+async function listen(wasTap = false) {
   if (stopListening) return
   let stream: MediaStream
   try {
@@ -444,8 +491,14 @@ async function listen() {
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     })
   } catch (err) {
-    inCall = false
     const denied = err instanceof DOMException && err.name === 'NotAllowedError'
+    if (inCall && denied && !wasTap) {
+      // Some phones only open the microphone from a tap. Stay in the call and
+      // ask for one.
+      setPhase('idle', 'Tik op de reactor om verder te praten')
+      return
+    }
+    inCall = false
     bubble(
       'note',
       denied
@@ -485,10 +538,9 @@ async function listen() {
     audioSession('playback')
     if (!send || started < 0) {
       if (inCall && send) {
-        // Nothing said for a while: stay in the call, but stop listening.
-        setPhase('idle', 'Ik hoorde niets — tik om verder te praten')
+        // Five minutes without a word: hang up rather than listen all day.
         inCall = false
-        document.body.dataset.call = 'off'
+        setPhase('idle', 'Opgehangen na vijf minuten stilte')
       } else setPhase('idle')
       return
     }
@@ -514,7 +566,7 @@ async function listen() {
     for (let i = 0; i < data.length; i++) sum += data[i] * data[i]
     const rms = Math.sqrt(sum / data.length)
     totalMs += frameMs
-    orb.style.setProperty('--level', String(Math.min(1, rms * 12)))
+    reactor.setLevel(Math.min(1, rms * 12))
 
     // What counts as the room is the quietest the last four seconds have been
     // (minimum statistics). Speech always has gaps between words, so this
@@ -541,7 +593,9 @@ async function listen() {
       if (started >= 0) silentMs += frameMs
     }
     if (started >= 0 && silentMs > 1100) finish(true)
-    else if (started < 0 && totalMs > 10_000) finish(true)
+    // Outside a call, ten quiet seconds end the turn. In a call, silence is
+    // just a pause — he keeps listening until you hang up.
+    else if (started < 0 && totalMs > (inCall ? 5 * 60_000 : 10_000)) finish(true)
     else if (totalMs > 30_000) finish(true)
   }
   source.connect(proc)
@@ -578,6 +632,11 @@ async function transcribeAndAsk(samples: Float32Array) {
     else setPhase('idle', 'Niet verstaan — tik en probeer opnieuw')
     return
   }
+  if (wakeWord && inCall && !/jarv/i.test(text) && Date.now() - lastAnswerAt > 30_000) {
+    // Not for him. Keep listening.
+    void listen()
+    return
+  }
   ask(text)
 }
 
@@ -587,31 +646,44 @@ orb.addEventListener('click', () => {
   audioSession('playback')
   unlockAudio()
   unlockSpeech()
-  if (phase === 'listening' || phase === 'hearing') {
-    // Tapping while he listens: send what you have said, or hang up if
-    // nothing yet.
-    if (phase === 'hearing') stopListening?.(true)
-    else {
-      inCall = false
-      stopListening?.(false)
-    }
+  if (!inCall) {
+    // One tap starts a conversation that lasts until you hang up.
+    inCall = true
+    if (phase === 'speaking' || phase === 'thinking') interrupt()
+    void listen(true)
+    return
+  }
+  if (phase === 'hearing') {
+    // Done talking — no need to wait for the pause.
+    stopListening?.(true)
     return
   }
   if (phase === 'speaking' || phase === 'thinking') {
     // Barge in: stop him and listen.
     interrupt()
-    queued = 0
     turnDone = false
-    void listen()
+    void listen(true)
     return
   }
-  if (inCall) {
-    inCall = false
-    setPhase('idle')
-    return
+  if (phase === 'idle') void listen(true)
+  // While listening a tap does nothing: hanging up has its own button.
+})
+
+hangupBtn.addEventListener('click', () => {
+  inCall = false
+  stopListening?.(false)
+  interrupt()
+  setPhase('idle', 'Opgehangen')
+})
+
+wakeBtn.addEventListener('click', () => {
+  wakeWord = !wakeWord
+  try {
+    localStorage.setItem('jarvis-wake', wakeWord ? 'on' : 'off')
+  } catch {
+    /* private browsing */
   }
-  inCall = true
-  void listen()
+  showWake()
 })
 
 typeForm.addEventListener('submit', (event) => {
@@ -623,7 +695,8 @@ typeForm.addEventListener('submit', (event) => {
   if (!text) return
   textInput.value = ''
   if (phase === 'speaking' || phase === 'thinking') interrupt()
-  inCall = false
+  // Typing during a conversation does not end it: once he has answered he
+  // listens again.
   stopListening?.(false)
   ask(text)
 })
@@ -667,9 +740,11 @@ async function boot() {
       listenState?: string
       speak?: boolean
       speakState?: string
+      tts?: boolean
     }
-    serverVoice = health.speak !== false && health.speakState !== 'failed'
-    if (health.speakState === 'loading') {
+    elevenVoice = health.tts === true
+    serverVoice = elevenVoice || (health.speak !== false && health.speakState !== 'failed')
+    if (!elevenVoice && health.speakState === 'loading') {
       void waitFor(
         'speakState',
         bubble('note', 'Zijn stem wordt klaargezet — de eerste keer duurt dat een minuut…'),
