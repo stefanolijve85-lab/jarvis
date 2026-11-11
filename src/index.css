@@ -2054,3 +2054,53 @@ kbd {
     transform: translateX(-50%);
   }
 }
+
+
+/* -------------------------------------------------- waking after the phone slept */
+
+.wake-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  border: 0;
+  padding: 24px;
+  background: radial-gradient(ellipse at center, rgba(1, 12, 20, 0.72), rgba(1, 6, 12, 0.94));
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(6px);
+}
+.wake-ring {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 55%, transparent),
+    inset 0 0 24px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: wakePulse 1.6s ease-in-out infinite;
+}
+.wake-word {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  letter-spacing: 0.3em;
+  color: #eafcff;
+  text-shadow: 0 0 18px var(--accent);
+  text-align: center;
+}
+.wake-sub {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.6;
+  text-align: center;
+}
+@keyframes wakePulse {
+  50% { transform: scale(0.9); opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wake-ring { animation: none; }
+}

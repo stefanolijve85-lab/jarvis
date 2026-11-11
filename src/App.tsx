@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Scene } from './scene/Scene'
 import { Hud } from './ui/Hud'
 import { Boot } from './ui/Boot'
@@ -30,7 +30,8 @@ import {
   usingBridge,
   type Msg,
 } from './lib/brain'
-import { startAnalyser, micLevel } from './lib/audio'
+import { startAnalyser, restartAnalyser, micLevel } from './lib/audio'
+import { keepScreenOn } from './lib/wakeLock'
 import { probeCapabilities } from './lib/capabilities'
 import { env } from './config'
 
@@ -73,6 +74,8 @@ const LEADING_NAME = new RegExp(`^(?:hey|hi|ok|okay|yo)?\\s*${NAME}\\b[\\s,.:!?-
 export default function App() {
   const store = useStore
   const phase = useStore((s) => s.phase)
+  /** The page was put away (screen locked, app switched) and must be woken. */
+  const [asleep, setAsleep] = useState(false)
   const history = useRef<Msg[]>([])
   const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null)
   const voice = useRef<Voice | null>(null)
@@ -355,6 +358,7 @@ export default function App() {
     // output first, before anything awaits: iOS stops counting the tap once
     // the handler has yielded.
     unlockSpeechOutput()
+    keepScreenOn()
     await sfx.unlockAudio()
     sfx.play('boot')
     // The score. Must be started from inside this click handler for the same
@@ -538,6 +542,63 @@ export default function App() {
     store.getState().setPhase('dormant')
   }
 
+  // -- coming back after the phone slept -------------------------------------
+
+  /**
+   * After the screen has been off or the app put away, a phone has quietly
+   * taken everything: the microphone, the sound, the connection. Nothing
+   * reports it — he simply never hears another word. So when the page comes
+   * back after being hidden, the interface asks for one tap, and that tap (the
+   * gesture iOS insists on before sound may play again) rebuilds the lot in
+   * place: no reload, no start-up sequence, the conversation where it was.
+   */
+  useEffect(() => {
+    let hiddenAt = 0
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now()
+        return
+      }
+      const away = hiddenAt ? Date.now() - hiddenAt : 0
+      hiddenAt = 0
+      const p = store.getState().phase
+      if (away > 3000 && p !== 'offline' && p !== 'boot') setAsleep(true)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [store])
+
+  const resume = async () => {
+    setAsleep(false)
+    // Everything that needs the tap, first, before anything awaits.
+    unlockSpeechOutput()
+    keepScreenOn()
+    music.enable()
+    await sfx.unlockAudio()
+    speaker.current?.cancel()
+    voice.current?.stop()
+    voice.current = null
+    void warm().catch(() => {})
+    try {
+      await restartAnalyser()
+    } catch {
+      /* the reactor just will not pulse */
+    }
+    try {
+      voice.current = await startVoice({
+        mode,
+        onWake,
+        onSpeechStart,
+        onPartial,
+        onUtterance,
+        onError: onVoiceError,
+      })
+    } catch (err) {
+      onVoiceError(String((err as Error)?.message ?? err))
+    }
+    store.getState().setPhase('dormant')
+  }
+
   // -- clap to start --------------------------------------------------------
 
   /**
@@ -713,6 +774,13 @@ export default function App() {
       <Boot />
       <Diagnostics />
       <Ignition onStart={() => void powerOn()} />
+      {asleep && (
+        <button type="button" className="wake-overlay" onClick={() => void resume()}>
+          <span className="wake-ring" aria-hidden="true" />
+          <span className="wake-word">TIK OM VERDER TE GAAN</span>
+          <span className="wake-sub">Jarvis was in slaap gezet door je telefoon</span>
+        </button>
+      )}
     </>
   )
 }
