@@ -287,6 +287,24 @@ if (typeof speechSynthesis !== 'undefined') {
  */
 let outCtx: AudioContext | null = null
 
+/**
+ * Wakes the speech output inside the INITIALISE tap. On an iPhone a context
+ * made later, outside a tap, stays suspended and plays nothing — so it is
+ * made here, and a silent sample played, while the tap still counts.
+ */
+export function unlockSpeechOutput() {
+  const ctx = outputContext()
+  if (!ctx) return
+  try {
+    const source = ctx.createBufferSource()
+    source.buffer = ctx.createBuffer(1, 1, 22050)
+    source.connect(ctx.destination)
+    source.start()
+  } catch {
+    /* nothing to unlock */
+  }
+}
+
 function outputContext(): AudioContext | null {
   try {
     if (!outCtx) outCtx = new AudioContext()
@@ -343,6 +361,8 @@ export function createSpeaker(): Speaker {
   let pumping = false
 
   let currentAudio: HTMLAudioElement | null = null
+  /** The sentence playing through Web Audio, when that is the path in use. */
+  let currentSource: { stop: () => void } | null = null
   let nativeInFlight = false
   let drained: Array<() => void> = []
 
@@ -581,7 +601,87 @@ export function createSpeaker(): Speaker {
       speechSynthesis.speak(u)
     })
 
-  const playUrl = (url: string, text: string) =>
+  /**
+   * Generated speech through Web Audio: decode the clip and play it as a
+   * buffer. This is the path on an iPhone. iOS only lets an <audio> element
+   * start inside a tap, and a sentence arriving from the network is never
+   * inside one, so there the element is refused most of the time — the voice
+   * drops out, and a refused element can leave the queue waiting. A Web Audio
+   * context unlocked by INITIALISE can play at any time, which is why the
+   * start-up music was always heard when he was not. Returns false when the
+   * clip cannot be decoded, so the element can still be tried.
+   */
+  const playBuffer = async (url: string, text: string): Promise<boolean> => {
+    const ctx = outputContext()
+    if (!ctx) return false
+    let clip: AudioBuffer
+    try {
+      const bytes = await (await fetch(url)).arrayBuffer()
+      clip = await ctx.decodeAudioData(bytes)
+    } catch {
+      return false
+    }
+    if (cancelled) {
+      URL.revokeObjectURL(url)
+      return true
+    }
+    await ctx.resume().catch(() => {})
+    diag.spoken++
+    diag.lastText = text.slice(0, 60)
+    diag.voice = diag.engine === 'kokoro' ? KOKORO_VOICE : 'ElevenLabs'
+    return new Promise<boolean>((resolve) => {
+      const source = ctx.createBufferSource()
+      source.buffer = clip
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      analyser.connect(ctx.destination)
+      const bins = new Uint8Array(analyser.frequencyBinCount)
+      let raf = 0
+      const tick = () => {
+        analyser.getByteFrequencyData(bins as Uint8Array<ArrayBuffer>)
+        let sum = 0
+        for (let i = 2; i < bins.length; i++) sum += bins[i]
+        outLevel = Math.min(1, (sum / (bins.length - 2) / 255) * 3.5)
+        raf = requestAnimationFrame(tick)
+      }
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        cancelAnimationFrame(raf)
+        outLevel = 0.12
+        URL.revokeObjectURL(url)
+        if (currentSource === handle) currentSource = null
+        resolve(true)
+      }
+      const handle = {
+        stop: () => {
+          try {
+            source.stop()
+          } catch {
+            /* not started, or already over */
+          }
+          finish()
+        },
+      }
+      currentSource = handle
+      source.onended = finish
+      // In case 'ended' never comes — a context suspended under it.
+      setTimeout(finish, clip.duration * 1000 + 2000)
+      source.start()
+      diag.started++
+      diag.lastError = ''
+      tick()
+    })
+  }
+
+  const playUrl = async (url: string, text: string) => {
+    if (await playBuffer(url, text)) return
+    return playElement(url, text)
+  }
+
+  const playElement = (url: string, text: string) =>
     new Promise<void>((resolve) => {
       const audio = new Audio(url)
       currentAudio = audio
@@ -728,6 +828,10 @@ export function createSpeaker(): Speaker {
       if (currentAudio) {
         currentAudio.pause()
         currentAudio = null
+      }
+      if (currentSource) {
+        currentSource.stop()
+        currentSource = null
       }
       outLevel = 0
       settleDrained()

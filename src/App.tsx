@@ -6,7 +6,7 @@ import { Ignition } from './ui/Ignition'
 import { Diagnostics } from './ui/Diagnostics'
 import { useStore } from './store'
 import { startVoice, type Voice, type VoiceMode } from './lib/voice'
-import { createSpeaker, cycleVoice, currentVoiceName } from './lib/tts'
+import { createSpeaker, cycleVoice, currentVoiceName, unlockSpeechOutput } from './lib/tts'
 import * as sfx from './lib/sfx'
 import * as music from './lib/music'
 import * as hands from './lib/hands'
@@ -350,7 +350,10 @@ export default function App() {
     const s = store.getState()
 
     // Must happen inside the click handler — browsers won't start an
-    // AudioContext or speech synthesis without a user gesture.
+    // AudioContext or speech synthesis without a user gesture. The speech
+    // output first, before anything awaits: iOS stops counting the tap once
+    // the handler has yielded.
+    unlockSpeechOutput()
     await sfx.unlockAudio()
     sfx.play('boot')
     // The score. Must be started from inside this click handler for the same
