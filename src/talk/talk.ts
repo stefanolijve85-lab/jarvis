@@ -172,15 +172,40 @@ if (speech) {
   speech.addEventListener?.('voiceschanged', pickVoice)
 }
 
+/**
+ * Where the phone sends sound. On an iPhone, once the microphone has been
+ * open the page is in a recording session, and in that session speech goes to
+ * the earpiece — so quietly you would not know he was talking — or nowhere.
+ * Safari 17+ lets a page say which it wants: 'playback' while he speaks puts
+ * him on the loudspeaker (and past the silent switch), 'play-and-record' while
+ * he listens.
+ */
+type AudioSessionType = 'auto' | 'playback' | 'play-and-record'
+function audioSession(type: AudioSessionType) {
+  const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession
+  if (!session) return
+  try {
+    session.type = type
+  } catch {
+    /* not supported here */
+  }
+}
+
 /** Speech must first be started inside a tap on iOS, or it never plays. */
 let unlocked = false
 function unlockSpeech() {
   if (unlocked || !speech) return
   unlocked = true
-  const u = new SpeechSynthesisUtterance(' ')
+  // An empty utterance does not count on every iOS version; a real word,
+  // silent, does.
+  const u = new SpeechSynthesisUtterance('ja')
   u.volume = 0
+  u.lang = language
   speech.speak(u)
 }
+
+/** Said once, if the phone never actually starts speaking. */
+let warnedSilent = false
 
 function say(sentence: string) {
   const text = sentence.trim()
@@ -199,9 +224,28 @@ function say(sentence: string) {
   }
   u.onend = finish
   u.onerror = finish
+  let began = false
+  u.onstart = () => {
+    began = true
+  }
   // iOS sometimes never reports the end of an utterance.
   setTimeout(finish, 2500 + text.length * 110)
+  setTimeout(() => {
+    if (began || warnedSilent || finished) return
+    warnedSilent = true
+    bubble(
+      'note',
+      'Je telefoon speelt zijn stem niet af. Zet de stille-modusknop uit en het volume ' +
+        'omhoog, en tik daarna nog eens op de knop.',
+    )
+  }, 2000)
   if (phase === 'thinking') setPhase('speaking')
+  // Off the microphone and onto the loudspeaker before the first word.
+  audioSession('playback')
+  void audio?.suspend().catch(() => {})
+  // A synthesiser left paused (iOS does this after an interruption) speaks
+  // nothing until resumed.
+  speech.resume()
   speech.speak(u)
 }
 
@@ -290,6 +334,7 @@ async function listen() {
   if (stopListening) return
   let stream: MediaStream
   try {
+    audioSession('play-and-record')
     audio ??= new AudioContext()
     await audio.resume()
     stream = await navigator.mediaDevices.getUserMedia({
@@ -332,6 +377,9 @@ async function listen() {
     proc.disconnect()
     source.disconnect()
     for (const track of stream.getTracks()) track.stop()
+    // Leave the recording session as soon as there is nothing to record, so
+    // whatever is played next goes to the loudspeaker.
+    audioSession('playback')
     if (!send || started < 0) {
       if (inCall && send) {
         // Nothing said for a while: stay in the call, but stop listening.
@@ -433,6 +481,7 @@ async function transcribeAndAsk(samples: Float32Array) {
 // ---------------------------------------------------------------- controls
 
 orb.addEventListener('click', () => {
+  audioSession('playback')
   unlockSpeech()
   if (phase === 'listening' || phase === 'hearing') {
     // Tapping while he listens: send what you have said, or hang up if
