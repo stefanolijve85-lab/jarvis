@@ -293,6 +293,19 @@ faster; `onnx-community/whisper-large-v3-turbo` understands far better but
 needs a strong CPU. `JARVIS_TALK_LANGUAGE` sets the language (default `nl-NL`),
 and `JARVIS_WHISPER=off` turns hearing off.
 
+### Keep JARVIS running (Linux)
+
+```bash
+npm run service
+```
+
+This installs JARVIS as a systemd user service. He then starts at boot,
+restarts if he stops, and needs no terminal left open. He runs `npm run remote`
+as your own user, with your Claude Code login and your `.env.local`. Use
+`journalctl --user -u jarvis -f` to see what he is doing,
+`systemctl --user restart jarvis` after an update, and
+`npm run service -- --remove` to stop for good.
+
 ### 2. Twilio — calls and WhatsApp
 
 1. Make an account at <https://www.twilio.com>. A trial account works for

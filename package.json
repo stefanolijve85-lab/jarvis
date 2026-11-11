@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node scripts/start.mjs",
     "remote": "node scripts/start.mjs --remote",
+    "service": "node scripts/service.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
