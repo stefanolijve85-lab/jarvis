@@ -253,6 +253,32 @@ to the internet. It is https, which is what lets the browser use the microphone
 there. Behind it, the page talks to the bridge through the dev server's
 `/bridge` proxy, and the bridge accepts exactly that one extra origin.
 
+### The talk app — JARVIS on your phone, for free
+
+The full interface is a 3D scene made for a desktop browser; on a phone it
+stutters, and an iPhone has no reliable speech recognition for it to use. The
+talk app is the light alternative: a single button, made for talking.
+
+Open **`https://your-machine.your-tailnet.ts.net/talk`** on your phone, with
+Tailscale on. Tap once and talk. JARVIS listens until you stop, answers out
+loud, and then listens again, like a call. Tap again to hang up. You can type
+as well. In Safari, *Share → Add to Home Screen* makes it an app of its own.
+
+- **Hearing happens on your own computer.** The phone records the raw audio
+  and sends it to the bridge's `/listen`, where Whisper (through
+  transformers.js) turns it into text. Nothing goes to a speech service and
+  nothing costs per minute. The model downloads once, on first start, into
+  `~/.jarvis/models`. That is a few hundred MB for `whisper-small`.
+- **Speaking** uses the phone's own voice. On an iPhone, turn the silent switch
+  off.
+- It is the same agent, with no screen tools: the socket connects with
+  `?mode=talk`.
+
+`JARVIS_WHISPER_MODEL` picks another model. `onnx-community/whisper-base` is
+faster; `onnx-community/whisper-large-v3-turbo` understands far better but
+needs a strong CPU. `JARVIS_TALK_LANGUAGE` sets the language (default `nl-NL`),
+and `JARVIS_WHISPER=off` turns hearing off.
+
 ### 2. Twilio — calls and WhatsApp
 
 1. Make an account at <https://www.twilio.com>. A trial account works for
@@ -350,6 +376,10 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `TWILIO_WHATSAPP_FROM` | `+14155238886` | The WhatsApp sender (the sandbox by default) |
 | `JARVIS_PHONE_PUBLIC_URL` | from Funnel | Where Twilio reaches the phone line; `npm run remote` fills it in |
 | `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
+| `JARVIS_TALK_LANGUAGE` | `nl-NL` | Language the talk app listens and speaks in |
+| `JARVIS_WHISPER_MODEL` | `onnx-community/whisper-small` | Speech recognition model for the talk app |
+| `JARVIS_WHISPER` | on | `off` turns speech recognition off |
+| `JARVIS_WHISPER_PRELOAD` | on | `0` loads the model on first use instead of at startup |
 | `JARVIS_PHONE_LANGUAGE` | `nl-NL` | Language callers are heard and answered in |
 | `JARVIS_PHONE_GREETING` | `Ja, meneer?` | What he says when he picks up |
 | `JARVIS_PHONE_TTS_PROVIDER`, `JARVIS_PHONE_VOICE` | Twilio's default | Text-to-speech on calls |

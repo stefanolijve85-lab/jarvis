@@ -1,11 +1,27 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 const BRIDGE_PORT = Number(process.env.JARVIS_BRIDGE_PORT) || 8787
 
+/** /talk opens the talk app (talk.html), the light page for phones. */
+const talkRoute = (): Plugin => ({
+  name: 'jarvis-talk-route',
+  configureServer(server) {
+    server.middlewares.use((req, _res, next) => {
+      if (req.url === '/talk' || req.url === '/talk/') req.url = '/talk.html'
+      next()
+    })
+  },
+})
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), talkRoute()],
+  build: {
+    rolldownOptions: {
+      input: { main: 'index.html', talk: 'talk.html' },
+    },
+  },
   server: {
     // Honour PORT so a second instance can run alongside the first. The bridge
     // only accepts sockets from localhost:5173-5199, so stay inside that range

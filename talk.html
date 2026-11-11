@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#01060c" />
+    <!-- Add to Home Screen on an iPhone turns this into an app of its own. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Jarvis" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <!--
+      The talk app: JARVIS on a phone, without the 3D interface. Nothing here is
+      fetched from anywhere but this server — the page itself, the bridge (on
+      localhost, or through /bridge from another device) and Vite's socket.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        base-uri 'self';
+        object-src 'none';
+        frame-src 'none';
+        img-src 'self' data:;
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        connect-src 'self' ws: wss: http://localhost:8787 http://127.0.0.1:8787;
+        media-src 'self' blob:;
+      "
+    />
+    <title>Jarvis</title>
+  </head>
+  <body>
+    <main class="talk">
+      <header class="top">
+        <div class="brand">J.A.R.V.I.S.</div>
+        <div class="link" id="link" title="Verbinding">
+          <span class="dot"></span><span id="link-text">verbinden…</span>
+        </div>
+      </header>
+
+      <section class="log" id="log" aria-live="polite">
+        <p class="hint" id="hint">
+          Tik op de knop en praat. Jarvis luistert tot je stil bent, antwoordt hardop en
+          luistert daarna weer — net als bellen. Tik nog eens om op te hangen.
+        </p>
+      </section>
+
+      <section class="controls">
+        <div class="status" id="status">Tik om te praten</div>
+        <button class="orb" id="orb" type="button" aria-label="Praten">
+          <span class="ring"></span>
+          <span class="core"></span>
+        </button>
+        <form class="type" id="type">
+          <input id="text" type="text" placeholder="Of typ een bericht…" autocomplete="off" />
+          <button type="submit" aria-label="Versturen">➤</button>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="/src/talk/talk.ts"></script>
+  </body>
+</html>

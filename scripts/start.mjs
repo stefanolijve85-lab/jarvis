@@ -181,7 +181,10 @@ function remoteSetup(bridgeEnv) {
     }
   }
 
-  console.log(`\n  Open JARVIS from any of your devices on Tailscale:\n\n      ${origin}\n`)
+  console.log(
+    `\n  Open JARVIS from any of your devices on Tailscale:\n\n      ${origin}\n` +
+      `\n  On a phone, open the talk app instead — light, and made for talking:\n\n      ${origin}/talk\n`,
+  )
 }
 
 /** Whether .env.local or the shell carries a Twilio account. */

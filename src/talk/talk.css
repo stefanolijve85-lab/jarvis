@@ -1,0 +1,249 @@
+:root {
+  --bg: #01060c;
+  --panel: #07131d;
+  --line: #12303d;
+  --text: #cfe9ee;
+  --dim: #6f97a1;
+  --accent: #5fd4e6;
+  --me: #0d2a36;
+  --warn: #e0a35f;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 16px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+.talk {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: max(12px, env(safe-area-inset-top)) 16px max(12px, env(safe-area-inset-bottom));
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  letter-spacing: 0.35em;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.link .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.link[data-state='up'] .dot {
+  background: #5fe69a;
+}
+
+.link[data-state='down'] .dot {
+  background: #e65f5f;
+}
+
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.hint {
+  color: var(--dim);
+  text-align: center;
+  margin: auto 8px;
+  font-size: 15px;
+}
+
+.msg {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 16px;
+  max-width: 85%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg.me {
+  align-self: flex-end;
+  background: var(--me);
+  border-bottom-right-radius: 4px;
+}
+
+.msg.him {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 4px;
+}
+
+.msg.him:empty::after {
+  content: '…';
+  color: var(--dim);
+}
+
+.msg.note {
+  align-self: center;
+  color: var(--warn);
+  font-size: 14px;
+  text-align: center;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.status {
+  font-size: 14px;
+  color: var(--dim);
+  min-height: 1.4em;
+  text-align: center;
+}
+
+.orb {
+  --level: 0;
+  position: relative;
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.orb .ring,
+.orb .core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.orb .ring {
+  border: 2px solid var(--accent);
+  opacity: 0.55;
+  transform: scale(calc(1 + var(--level) * 0.25));
+  transition: transform 80ms linear;
+}
+
+.orb .core {
+  inset: 18px;
+  background: radial-gradient(circle at 50% 40%, #9feaf5, var(--accent) 45%, #135563);
+  box-shadow: 0 0 28px rgba(95, 212, 230, 0.45);
+}
+
+body[data-phase='listening'] .orb .ring,
+body[data-phase='hearing'] .orb .ring {
+  opacity: 1;
+}
+
+body[data-phase='hearing'] .orb .core {
+  box-shadow: 0 0 44px rgba(95, 212, 230, 0.8);
+}
+
+body[data-phase='thinking'] .orb .ring {
+  border-style: dashed;
+  animation: spin 1.6s linear infinite;
+}
+
+body[data-phase='speaking'] .orb .core {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+body[data-call='on'][data-phase='idle'] .orb .core {
+  background: radial-gradient(circle at 50% 40%, #f5b39f, #e66f5f 45%, #631d13);
+  box-shadow: 0 0 28px rgba(230, 111, 95, 0.45);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    transform: scale(0.92);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb .ring,
+  .orb .core {
+    animation: none !important;
+    transition: none;
+  }
+}
+
+.type {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.type input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 14px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 16px; /* 16px stops iOS zooming in on focus */
+}
+
+.type input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.type button {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 18px;
+  cursor: pointer;
+}

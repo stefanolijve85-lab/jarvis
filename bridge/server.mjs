@@ -23,6 +23,7 @@ import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
 import { visionServer } from './vision.mjs'
 import { createPhoneLine, phoneConfig, startConversation } from './phone.mjs'
+import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } from './whisper.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -547,6 +548,21 @@ brevity still holds, but here it is read rather than heard:
 - You cannot see photos, voice notes or files they send here.`,
 }
 
+PROMPT_CHANNEL.talk = `
+
+This is the TALK APP on their phone: a spoken conversation, like a call over
+the internet. Your words are read aloud to them and also shown as text.
+- Their words reach you through speech recognition, so expect mishearings. If a
+  request makes no sense, ask once, briefly.
+- ${DUTCH_SIR}
+- There are no blades, panels or interface here. Nothing can be shown except
+  your words. If something needs to be kept — a link, an address, a list —
+  offer to send it on WhatsApp.`
+
+/** The language the talk app listens and speaks in. */
+const TALK_LANGUAGE =
+  process.env.JARVIS_TALK_LANGUAGE?.trim() || PHONE.language || 'nl-NL'
+
 function channelPrompt(channel, context) {
   return (
     PROMPT_CORE +
@@ -863,7 +879,17 @@ const handleRequest = async (req, res) => {
     // student with nothing configured still has a working assistant.
     const eleven = Boolean(elevenKey())
     res.writeHead(200, { ...cors, 'content-type': 'application/json' })
-    return res.end(JSON.stringify({ ok: true, tts: eleven, stt: eleven }))
+    return res.end(
+      JSON.stringify({
+        ok: true,
+        tts: eleven,
+        stt: eleven,
+        // For the talk app: whether this machine transcribes, and in what.
+        listen: whisperEnabled(),
+        listenState: whisperState(),
+        language: TALK_LANGUAGE,
+      }),
+    )
   }
 
   // Serve local image files to the page. Screenshots and generated art land on
@@ -1070,6 +1096,54 @@ const handleRequest = async (req, res) => {
   // use, and a server-side transcriber cannot. Detecting that the user is
   // speaking at all is done locally with voice-activity detection, which never
   // touches this endpoint; this is only for the words.
+  // Speech to text on this machine, for the talk app. The page sends raw
+  // samples — mono 32-bit float PCM at 16 kHz, little-endian — rather than a
+  // compressed recording, so nothing here has to decode Safari's codecs.
+  if (req.method === 'POST' && req.url === '/listen') {
+    if (!whisperEnabled()) {
+      res.writeHead(503, { ...cors, 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: 'speech recognition is switched off' }))
+    }
+    if (!String(req.headers['content-type'] ?? '').startsWith('application/octet-stream')) {
+      res.writeHead(415, cors)
+      return res.end('send application/octet-stream')
+    }
+    const MAX = 16_000 * 4 * 60 // one minute
+    const chunks = []
+    let size = 0
+    for await (const chunk of req) {
+      size += chunk.length
+      if (size > MAX) {
+        req.destroy()
+        res.writeHead(413, cors)
+        return res.end('recording too long')
+      }
+      chunks.push(chunk)
+    }
+    if (size % 4 !== 0) {
+      res.writeHead(400, cors)
+      return res.end('not float32 samples')
+    }
+    const bytes = Buffer.concat(chunks)
+    const samples = new Float32Array(
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length),
+    )
+    // Under a third of a second is a tap, not a sentence.
+    if (samples.length < 16_000 / 3) {
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ text: '' }))
+    }
+    try {
+      const text = await transcribe(samples, TALK_LANGUAGE)
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ text }))
+    } catch (err) {
+      console.error('[jarvis] speech recognition failed:', err?.message ?? err)
+      res.writeHead(503, { ...cors, 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ error: 'speech recognition is unavailable' }))
+    }
+  }
+
   if (req.method === 'POST' && req.url === '/stt') {
     const key = elevenKey()
     if (!key) {
@@ -1229,6 +1303,15 @@ if (!DISABLED.has('browser')) void chromeAvailable().then((ok) => {
   )
 })
 
+// Loaded in the background so the first sentence spoken into the talk app is
+// not the one that waits for a download.
+if (whisperEnabled() && process.env.JARVIS_WHISPER_PRELOAD !== '0') {
+  console.log(`[jarvis] loading speech recognition (${WHISPER_MODEL}) — the first time downloads it`)
+  loadWhisper().catch((err) =>
+    console.warn(`[jarvis] speech recognition could not load: ${err?.message ?? err}`),
+  )
+}
+
 for (const problem of PHONE.problems) console.warn(`[jarvis] phone: ${problem}`)
 if (PHONE.enabled) {
   try {
@@ -1362,8 +1445,12 @@ const RESULT_FAILURES = {
   default: 'The turn ended without an answer.',
 }
 
-wss.on('connection', (socket) => {
-  console.log('[jarvis] client connected')
+wss.on('connection', (socket, req) => {
+  // The talk app (talk.html) connects with ?mode=talk: the same agent, with no
+  // interface to draw on, so it gets the talk prompt and none of the screen
+  // tools instead of being told to put things on blades nobody can see.
+  const talk = new URL(req.url ?? '/', 'http://x').searchParams.get('mode') === 'talk'
+  console.log(`[jarvis] client connected${talk ? ' (talk app)' : ''}`)
 
   // Answer the HUD straight away rather than making it wait for the agent's
   // first turn. Refined later by the real init message.
@@ -1527,7 +1614,16 @@ wss.on('connection', (socket) => {
 
   const session = query({
     prompt: userMessages(),
-    options: agentOptions({
+    options: agentOptions(talk ? {
+      systemPrompt: channelPrompt('talk', ''),
+      mcpServers: {
+        ...MCP_SERVERS,
+        ...(DISABLED.has('browser')
+          ? {}
+          : { jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES }) }),
+        ...phoneServers('talk'),
+      },
+    } : {
       systemPrompt: SYSTEM_PROMPT,
       // Everything Claude Code has configured, plus the HUD as an in-process
       // server. The HUD's handler closes over this socket, so a `display` call
