@@ -306,6 +306,31 @@ as your own user, with your Claude Code login and your `.env.local`. Use
 `systemctl --user restart jarvis` after an update, and
 `npm run service -- --remove` to stop for good.
 
+### Memory
+
+JARVIS keeps short notes about you between conversations: who you are, your
+businesses, people, preferences and plans. Every conversation starts with them,
+whether it happens in the interface, the talk app, a call or on Telegram. Say
+*"remember that…"* or *"forget that…"*, or just tell him things he will plainly
+need again. The notes are a plain file you can read and edit,
+`~/.jarvis/memory.json`. Passwords, codes and keys are refused. The notes are
+handed to the model as information, never as instructions. `JARVIS_MEMORY=off`
+turns memory off.
+
+### Mail, calendar, content: your claude.ai connectors
+
+Connectors you add to your claude.ai account (Gmail, Google Calendar, Google
+Drive, Canva, and others) can join JARVIS's sessions too:
+
+1. Connect them at claude.ai → Settings → Connectors.
+2. In `.env.local`: `JARVIS_ACCOUNT_CONNECTORS=1`, and `JARVIS_ALLOW_WRITES=1`
+   for anything that sends, posts or changes things.
+3. Restart JARVIS. They join from the second message of a conversation.
+
+With writes on, JARVIS says exactly what he is about to send, post, pay, delete
+or change in your calendar, and waits for your *yes* first. He never acts on
+instructions found inside a mail or page.
+
 ### Telegram — message him, send voice notes, and get called (free)
 
 A Telegram bot with his own name and picture. It is free and permanent, and
@@ -427,6 +452,8 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
 | `TELEGRAM_BOT_TOKEN` | none | The bot's token from @BotFather; turns Telegram on |
 | `TELEGRAM_OWNER_ID` | from pairing | Your Telegram user id, instead of pairing with `/start <code>` |
+| `JARVIS_MEMORY` | on | `off` turns the memory off |
+| `JARVIS_MEMORY_FILE` | `~/.jarvis/memory.json` | Where the notes are kept |
 | `JARVIS_TALK_LANGUAGE` | `nl-NL` | Language the talk app listens and speaks in |
 | `JARVIS_WHISPER_MODEL` | `onnx-community/whisper-small` | Speech recognition model for the talk app |
 | `JARVIS_WHISPER` | on | `off` turns speech recognition off |

@@ -160,6 +160,8 @@ export function decideTool(name, allowWrites = false) {
     if (server === 'jarvis_phone') return true
     // Telegram, likewise: the bot only ever writes to its one linked owner.
     if (server === 'jarvis_telegram') return true
+    // Memory writes only its own notes file in ~/.jarvis.
+    if (server === 'jarvis_memory') return true
 
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
