@@ -79,7 +79,7 @@ function startBridge(env = {}) {
 }
 
 function post(port, body, headers = {}) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const req = request(
       {
         host: '127.0.0.1',
