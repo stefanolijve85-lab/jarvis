@@ -476,6 +476,29 @@ ringing that number reaches JARVIS. Then just ask: *"call me in ten minutes"*,
 
 ---
 
+## The morning briefing
+
+Every morning at eight (Amsterdam time) JARVIS writes a briefing himself and
+sends it to your Telegram (and WhatsApp, if set up), with a **📞 Bespreek met
+Jarvis** button that opens the talk app. It covers your agenda, mail that
+needs you, the weather, Kwizillo / Detepo / SoloTech (site status measured in
+code, sales and payments from Shopify and Mollie), two or three fresh ways to
+make money online, news, something to think about and a health tip. He only
+reads while writing it — nothing is sent, posted or changed.
+
+Say or type *"geef me nu de briefing"* to get one straight away.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `JARVIS_BRIEFING` | on | `off` switches it off |
+| `JARVIS_BRIEFING_TIME` | `08:00` | 24h, Europe/Amsterdam; a machine that was off still sends up to three hours late |
+| `JARVIS_BRIEFING_SITES` | — | comma-separated URLs to check, e.g. `https://solotech.nl,https://kwizillo.com` |
+| `JARVIS_BRIEFING_PLACE` / `_LAT` / `_LON` | Emmen | where the weather is for |
+| `JARVIS_BRIEFING_CALL` | — | `1` to also be phoned with it (needs the Twilio line) |
+
+The GitHub workflow `morning-briefing.yml` is kept as a weather-only fallback
+that runs only by hand, for when the home machine is down.
+
 ## Configuration
 
 Everything is optional in bridge mode. Frontend settings live in `.env.local`

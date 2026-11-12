@@ -27,6 +27,7 @@ import { loadWhisper, transcribe, whisperEnabled, whisperState, WHISPER_MODEL } 
 import { loadVoice, piperEnabled, speak, voiceState, PIPER_VOICE, PIPER_VOICE_EN } from './voice.mjs'
 import { createTelegram, ffmpeg, hasFfmpeg, telegramConfig } from './telegram.mjs'
 import { createWhatsApp, whatsappConfig } from './whatsapp.mjs'
+import { briefingConfig, createBriefing } from './briefing.mjs'
 import { appendExchange, historyEnabled, historyPrompt, memoryEnabled, memoryPrompt, memoryServer, recentExchanges } from './memory.mjs'
 import { homedir, tmpdir } from 'node:os'
 import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
@@ -627,6 +628,15 @@ reply so it reads well aloud as well as on screen.
 - Every reply you write is sent automatically. Do not use a tool to send it.
 - You cannot see photos or files they send here.`
 
+PROMPT_CHANNEL.briefing = `
+
+You are writing their MORNING BRIEFING: a written message read on a phone, not
+spoken. The two-sentence rule does not apply here — follow the structure you
+are given. Plain text with the emoji headings asked for, short lines, no
+markdown bold or tables. Gather what you need with your tools, but only read:
+never send, post, buy or change anything while writing it. Be concrete and
+honest; never pad a section that has nothing in it.`
+
 PROMPT_CHANNEL.talk = `
 
 This is the TALK APP on their phone: a spoken conversation, like a call over
@@ -757,11 +767,34 @@ const telegram = createTelegram(TELEGRAM, converse, {
   },
 })
 
+/**
+ * The morning briefing (bridge/briefing.mjs): written by the agent itself at
+ * eight, sent on Telegram (and WhatsApp), optionally phoned through.
+ */
+const BRIEFING = briefingConfig()
+const briefing = createBriefing(
+  BRIEFING,
+  converse,
+  {
+    telegram: TELEGRAM.enabled ? telegram : null,
+    whatsapp: whatsapp ? (text) => whatsapp.sendText(WHATSAPP.owner, text) : null,
+    call: PHONE.canCall
+      ? (text) =>
+          phoneLine.placeCall({
+            about: `Read them this morning's briefing, briefly and naturally, then take questions:\n\n${text}`,
+            opening: 'Goedemorgen, meneer. Uw ochtendbriefing.',
+          })
+      : null,
+  },
+  { connectorsWarmup: ACCOUNT_CONNECTORS },
+)
+
 /** The phone and Telegram tools for one conversation, keyed for mcpServers. */
 function phoneServers(channel, endCall) {
   const phone = phoneLine.tools({ channel, endCall })
   const tg = telegram.tools({ channel })
   return {
+    ...(channel !== 'briefing' && !BRIEFING.off ? { jarvis_briefing: briefing.tools() } : {}),
     ...(phone ? { jarvis_phone: phone } : {}),
     ...(whatsapp ? { jarvis_whatsapp: whatsapp.tools({ channel }) } : {}),
     ...(tg ? { jarvis_telegram: tg } : {}),
@@ -1593,6 +1626,7 @@ if (TELEGRAM.enabled) {
 
 for (const problem of PHONE.problems) console.warn(`[jarvis] phone: ${problem}`)
 for (const problem of WHATSAPP.problems) console.warn(`[jarvis] whatsapp: ${problem}`)
+briefing.start()
 if (WHATSAPP.enabled) {
   console.log(
     `[jarvis] whatsapp: Cloud API on${WHATSAPP.receives ? ` · webhook ${PHONE.publicUrl || '(set JARVIS_PHONE_PUBLIC_URL)'}/whatsapp/webhook` : ' · sending only (set WHATSAPP_VERIFY_TOKEN and WHATSAPP_APP_SECRET to receive)'}`,

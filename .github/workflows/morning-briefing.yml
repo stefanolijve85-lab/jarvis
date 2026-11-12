@@ -1,12 +1,12 @@
 name: Morning briefing
 
-# Eight o'clock in the Netherlands, all year. GitHub's schedule is in UTC and
-# knows nothing of summer time, so the job is started at both 06:00 and 07:00
-# UTC and the first step lets only the run that falls on 08:00 Amsterdam time
-# through. A manual run (workflow_dispatch) always sends.
+# A weather-only fallback. The real briefing is written by JARVIS himself on
+# the home machine (bridge/briefing.mjs), so the daily schedule is off and this
+# runs only by hand (Actions → Morning briefing → Run workflow) — for when that
+# machine is down. To schedule it again, add back:
+#   schedule:
+#     - cron: "0 6,7 * * *"   # 06:00 and 07:00 UTC; the clock step keeps 08:00 Amsterdam
 on:
-  schedule:
-    - cron: "0 6,7 * * *"
   workflow_dispatch:
 
 jobs:
