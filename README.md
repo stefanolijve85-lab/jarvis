@@ -496,8 +496,8 @@ Say or type *"geef me nu de briefing"* to get one straight away.
 | `JARVIS_BRIEFING_PLACE` / `_LAT` / `_LON` | Emmen | where the weather is for |
 | `JARVIS_BRIEFING_CALL` | — | `1` to also be phoned with it (needs the Twilio line) |
 
-The GitHub workflow `morning-briefing.yml` sends a weather-only briefing; once
-this one runs, disable that workflow to avoid getting two.
+The GitHub workflow `morning-briefing.yml` is kept as a weather-only fallback
+that runs only by hand, for when the home machine is down.
 
 ## Configuration
 
