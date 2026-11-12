@@ -153,6 +153,19 @@ export function decideTool(name, allowWrites = false) {
     // indicator the user can see for as long as it is live.
     if (server === 'jarvis_eyes') return true
 
+    // Phoning and messaging the owner. Not withheld behind allowWrites: the
+    // tools take no destination — the only number they can reach is the
+    // owner's own, fixed in JARVIS_OWNER_PHONE — and phone.mjs caps how many
+    // calls and messages an hour can go out.
+    if (server === 'jarvis_phone') return true
+    // Telegram, likewise: the bot only ever writes to its one linked owner.
+    if (server === 'jarvis_telegram') return true
+    // WhatsApp gates itself: messaging anyone but the owner is refused inside
+    // the tool unless writes are on, and the persona asks for a yes first.
+    if (server === 'jarvis_whatsapp') return true
+    // Memory writes only its own notes file in ~/.jarvis.
+    if (server === 'jarvis_memory') return true
+
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
       return allowWrites

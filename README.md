@@ -219,6 +219,263 @@ then the triangular arc reactor lighting up — with a start-up sound under it
 
 ---
 
+## Reach JARVIS from anywhere — and let him call you
+
+Three optional extras, each independent of the others:
+
+- **Open JARVIS from your phone or another computer**, privately, over
+  [Tailscale](https://tailscale.com).
+- **Phone calls.** JARVIS rings your mobile and holds a real spoken conversation
+  ("call me in twenty minutes about the render"), and picks up when you ring him.
+- **WhatsApp.** He messages you ("send that link to my phone"), and you can
+  message him back from anywhere.
+
+Your computer is still the brain, so it has to be on and awake. `npm run
+remote` keeps a Mac awake for as long as JARVIS runs.
+
+### 1. Tailscale — reach the interface from your phone
+
+1. Install Tailscale on this computer **and** on your phone
+   (<https://tailscale.com/download>), and sign in with the same account on both.
+2. In the Tailscale admin console, under **DNS**, turn on **MagicDNS** and
+   **HTTPS Certificates** (<https://login.tailscale.com/admin/dns>).
+3. Start JARVIS with:
+
+   ```bash
+   npm run remote
+   ```
+
+   It prints an address like `https://your-mac.tailnet-name.ts.net`. Open it in
+   Chrome on any of your Tailscale devices.
+
+Only devices signed in to your tailnet can open that address; nothing is opened
+to the internet. It is https, which is what lets the browser use the microphone
+there. Behind it, the page talks to the bridge through the dev server's
+`/bridge` proxy, and the bridge accepts exactly that one extra origin.
+
+### The talk app — JARVIS on your phone, for free
+
+The full interface is a 3D scene made for a desktop browser; on a phone it
+stutters, and an iPhone has no reliable speech recognition for it to use. The
+talk app is the light alternative: a single button, made for talking.
+
+Open **`https://your-machine.your-tailnet.ts.net/talk`** on your phone, with
+Tailscale on. Tap the reactor once and talk: JARVIS listens until you stop,
+answers out loud, and listens again, for as long as the conversation lasts.
+Pauses do not end it. **Hang up** does, or five minutes of silence. Tap the
+reactor while he speaks to interrupt. With **Wake word** on, he answers only
+what mentions "Jarvis", plus follow-ups within half a minute of his last
+answer, so a television in the room is left alone. You can type as well. In
+Safari, *Share → Add to Home Screen* makes it an app of its own. The reactor is
+drawn in 2D, so it stays light.
+
+With an ElevenLabs key (`ELEVENLABS_API_KEY` in `.env.local`), both the talk
+app and the full interface speak with the ElevenLabs voice instead (George, a
+British male, by default). Its model is multilingual, so it speaks Dutch
+too.
+
+- **Hearing happens on your own computer.** The phone records the raw audio
+  and sends it to the bridge's `/listen`, where Whisper (through
+  transformers.js) turns it into text. Nothing goes to a speech service and
+  nothing costs per minute. The model downloads once, on first start, into
+  `~/.jarvis/models`. That is a few hundred MB for `whisper-small`.
+- **Speaking also happens on your own computer.** [Piper](https://github.com/rhasspy/piper)
+  makes his voice, and the phone plays it as audio through `/speak`. A phone's
+  own speech synthesis cannot be relied on: in Chrome on an iPhone it is often
+  silent. Piper and a Dutch voice (`nl-rdh-medium`) download once into
+  `~/.jarvis/piper`, about 80 MB. If they cannot load, the phone's own voice
+  takes over.
+- It is the same agent, with no screen tools: the socket connects with
+  `?mode=talk`.
+
+`JARVIS_WHISPER_MODEL` picks another model. `onnx-community/whisper-base` is
+faster; `onnx-community/whisper-large-v3-turbo` understands far better but
+needs a strong CPU. `JARVIS_TALK_LANGUAGE` sets the language (default `nl-NL`),
+and `JARVIS_WHISPER=off` turns hearing off.
+
+### The conversation survives the app being closed
+
+Putting the app away, locking the phone, or swiping it out of the recents list
+is a pause, not a reset. The page writes the conversation and its session id
+to the phone's own storage on every turn and when it is put away. The bridge
+keeps the session for 12 hours after its client goes (`JARVIS_PARK_MINUTES`),
+numbering every frame. When the app opens again it shows the conversation,
+offers **VERDER GAAN** instead of the start-up sequence, and continues the same
+session, including any answer that finished while it was closed. The voice is
+stopped whenever the app is put away, so two voices never overlap. Only saying
+*"nieuw gesprek"* / *"new conversation"* (start over) or *"sluit af"* /
+*"quit"* ends it.
+
+### Keep JARVIS running (Linux)
+
+```bash
+npm run service
+```
+
+This installs JARVIS as a systemd user service. He then starts at boot,
+restarts if he stops, and needs no terminal left open. He runs `npm run remote`
+as your own user, with your Claude Code login and your `.env.local`. Use
+`journalctl --user -u jarvis -f` to see what he is doing,
+`systemctl --user restart jarvis` after an update, and
+`npm run service -- --remove` to stop for good.
+
+### Memory
+
+JARVIS keeps short notes about you between conversations: who you are, your
+businesses, people, preferences and plans. Every conversation starts with them,
+whether it happens in the interface, the talk app, a call or on Telegram. Say
+*"remember that…"* or *"forget that…"*, or just tell him things he will plainly
+need again. The notes are a plain file you can read and edit,
+`~/.jarvis/memory.json`. Passwords, codes and keys are refused. The notes are
+handed to the model as information, never as instructions. `JARVIS_MEMORY=off`
+turns memory off.
+
+He also remembers the conversation itself. Every exchange, on any surface, is
+kept in `~/.jarvis/history.jsonl`. The most recent ones, from the past two
+weeks, are handed to each new session, and the interface shows the last few
+again when it opens. Anything older he finds with `recall` when you refer to
+it: *"what did we agree last month about…"*. So closing the app on your phone
+and opening it again, or carrying on in Telegram what you started in the
+interface, picks up where you were. Only your words and his answers are kept,
+not the pages or mails he read. `JARVIS_HISTORY=off` turns it off.
+
+### Mail, calendar, content: your claude.ai connectors
+
+Connectors you add to your claude.ai account (Gmail, Google Calendar, Google
+Drive, Canva, and others) can join JARVIS's sessions too:
+
+1. Connect them at claude.ai → Settings → Connectors.
+2. In `.env.local`: `JARVIS_ACCOUNT_CONNECTORS=1`, and `JARVIS_ALLOW_WRITES=1`
+   for anything that sends, posts or changes things.
+3. Restart JARVIS. They join from the second message of a conversation.
+
+With writes on, JARVIS says exactly what he is about to send, post, pay, delete
+or change in your calendar, and waits for your *yes* first. He never acts on
+instructions found inside a mail or page.
+
+### Telegram — message him, send voice notes, and get called (free)
+
+A Telegram bot with his own name and picture. It is free and permanent, and
+nothing has to be reachable from the internet: the bridge fetches messages from
+Telegram itself.
+
+1. In Telegram, open **@BotFather** and send `/newbot`. Choose a name
+   (`Jarvis`) and a username ending in `bot`. BotFather replies with a
+   **token**. `/setuserpic` gives him a picture.
+2. Put the token in `.env.local` as `TELEGRAM_BOT_TOKEN=...`.
+3. For voice messages, install ffmpeg: `sudo apt install ffmpeg`.
+4. Restart JARVIS. The terminal (or `journalctl --user -u jarvis -f`) shows
+   `send: /start 123456`. Send exactly that to your bot. From then on it
+   answers only you. The link is kept in `~/.jarvis/telegram.json`.
+
+Write to him, or send a voice message: speech is recognised on your computer
+with Whisper, and he answers with a voice message in his own voice (ElevenLabs
+with a key, otherwise Piper) as well as the text. *"Call me in ten minutes"*
+sends a notification with a button that opens the talk app. *"Send me that"*
+messages you. Anyone else who finds the bot gets no answer.
+
+### WhatsApp on your own business number (Meta Cloud API)
+
+This is WhatsApp straight from Meta, with no Twilio. People see your own number,
+name and picture. JARVIS can message you, and, after you say yes, other people
+in your name.
+
+1. In **Meta Business Manager** (business.facebook.com), create a WhatsApp
+   Business account and **add a phone number**: a number that is not already on
+   WhatsApp. Its display name and profile picture are yours to set there, and
+   Meta reviews the display name.
+2. In **developers.facebook.com**, create an app of type *Business*, add the
+   **WhatsApp** product, and note the **Phone number ID** (not the number). In
+   Business settings, add a **System user**, give it the app and the WhatsApp
+   account, and generate a **permanent token** with
+   `whatsapp_business_messaging` and `whatsapp_business_management`.
+3. In `.env.local`:
+
+   ```bash
+   WHATSAPP_TOKEN=...
+   WHATSAPP_PHONE_NUMBER_ID=...
+   WHATSAPP_TO=+31612345678        # you
+   WHATSAPP_VERIFY_TOKEN=any-long-random-string
+   WHATSAPP_APP_SECRET=...          # App settings → Basic → App secret
+   ```
+
+4. To receive messages: `npm run remote` publishes the phone line through
+   Tailscale Funnel. In the app's **WhatsApp → Configuration**, set the
+   callback URL to `https://<your-machine>.ts.net:8443/whatsapp/webhook`, use
+   the same verify token, and subscribe to **messages**.
+
+WhatsApp's own rule applies: free text reaches someone only within 24 hours of
+their last message to you. Outside that window JARVIS uses an **approved
+template** (`whatsapp_template`), which you create under *Message templates* in
+Business Manager. When a send fails for that reason, he says so and offers a
+template. Messaging anyone but you needs `JARVIS_ALLOW_WRITES=1`, and he states
+the recipient and text and waits for your yes. Webhooks are checked against
+Meta's signature, and only your own number's messages reach the agent. With
+the Cloud API set up, Twilio's WhatsApp is switched off (Twilio stays for
+calls).
+
+### 2. Twilio — calls and WhatsApp
+
+1. Make an account at <https://www.twilio.com>. A trial account works for
+   testing; it can only call and message numbers you have verified, which is
+   yours.
+2. **For calls**, buy a phone number with voice in the Twilio console. Then
+   open **Voice → Settings → General** and enable the **Predictive and
+   Generative AI/ML Features Addendum**. Calls run on Twilio's
+   ConversationRelay, which needs it.
+3. **For WhatsApp**, open **Messaging → Try it out → Send a WhatsApp message**
+   and send the `join …` code it shows from your own WhatsApp to the sandbox
+   number. Then, under **Sandbox settings**, set **When a message comes in** to
+   the address the bridge prints at startup (it ends in `/twilio/whatsapp`),
+   method POST.
+4. Put your settings in `.env.local` (git ignores it):
+
+   ```bash
+   TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   TWILIO_AUTH_TOKEN=your-auth-token
+   JARVIS_OWNER_PHONE=+31612345678
+   TWILIO_PHONE_NUMBER=+15551234567
+   ```
+
+5. Start with `npm run remote`. The first time, Tailscale may ask you to allow
+   **Funnel** for your tailnet and print a link to do so. Open it and run the
+   command again.
+
+On startup the bridge points your Twilio number's incoming calls at itself, so
+ringing that number reaches JARVIS. Then just ask: *"call me in ten minutes"*,
+*"send me that on WhatsApp"*. Or ring him, or message him.
+
+**Good to know**
+
+- WhatsApp only lets a business number message you within **24 hours of your
+  last message to it**. The sandbox also expires after a few days of silence;
+  send `join …` again to renew it. For a permanent number, register a WhatsApp
+  sender in Twilio and set `TWILIO_WHATSAPP_FROM`.
+- Twilio charges per minute and per message. A trial account comes with credit.
+- A call starts a fresh conversation, with no memory of what was said in the
+  browser. JARVIS hands it a briefing when he places the call.
+- A call or message scheduled for later is held in memory. Restarting the
+  bridge forgets it.
+
+### How it is kept safe
+
+- **One number.** The tools take no destination. JARVIS can only ever call or
+  message `JARVIS_OWNER_PHONE`, and calls or messages from any other number are
+  rejected or ignored.
+- **A separate door.** Twilio has to reach this computer from the internet, so
+  the phone line is its own small server (port 8788) that serves nothing but
+  three Twilio routes. Tailscale Funnel publishes only that port, as `:8443`.
+  The interface, the bridge, your files and your browser stay private.
+- **Signed requests.** Every webhook must carry a valid `X-Twilio-Signature`,
+  an HMAC keyed with your auth token. A call's audio stream is accepted only
+  with a one-time token that was handed to Twilio inside a signed exchange.
+- **A ceiling.** At most 6 calls and 40 messages go out per hour, whatever the
+  agent is talked into.
+- Everything else about the agent is unchanged: the same model, the same
+  read-only gate and the same tools as in the browser, minus the screen.
+
+---
+
 ## Configuration
 
 Everything is optional in bridge mode. Frontend settings live in `.env.local`
@@ -247,13 +504,45 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `JARVIS_DEBUG` | off | `1` logs every agent message to the bridge terminal, answer text and tool calls included |
 | `JARVIS_VOICE_ID` | none | ElevenLabs voice id |
 | `ELEVENLABS_API_KEY` | none | Optional; enables the ElevenLabs voice + Scribe |
+| `JARVIS_STT` | `elevenlabs` with a key | `browser` keeps the browser's own speech recognition while speaking with ElevenLabs |
+| `JARVIS_PUBLIC_ORIGIN` | none | Set by `npm run remote`: the Tailscale address the interface is opened from |
+| `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` | none | Your Twilio account; turns the phone line on |
+| `JARVIS_OWNER_PHONE` | none | Your mobile, e.g. `+31612345678`: the only number JARVIS calls, messages or answers |
+| `TWILIO_PHONE_NUMBER` | none | The Twilio voice number calls come from and go to |
+| `TWILIO_WHATSAPP_FROM` | `+14155238886` | The WhatsApp sender (the sandbox by default) |
+| `JARVIS_PHONE_PUBLIC_URL` | from Funnel | Where Twilio reaches the phone line; `npm run remote` fills it in |
+| `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | none | Meta Cloud API: turns WhatsApp on (replaces Twilio's) |
+| `WHATSAPP_TO` | `JARVIS_OWNER_PHONE` | Your own number, the default recipient |
+| `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` | none | Receiving: the webhook's verify token and the app secret its signature is checked with |
+| `WHATSAPP_API_VERSION` | `v20.0` | Graph API version |
+| `JARVIS_PARK_MINUTES` | `720` | How long a session waits for its app to come back |
+| `TELEGRAM_BOT_TOKEN` | none | The bot's token from @BotFather; turns Telegram on |
+| `TELEGRAM_OWNER_ID` | from pairing | Your Telegram user id, instead of pairing with `/start <code>` |
+| `JARVIS_MEMORY` | on | `off` turns the memory off |
+| `JARVIS_MEMORY_FILE` | `~/.jarvis/memory.json` | Where the notes are kept |
+| `JARVIS_TALK_LANGUAGE` | `nl-NL` | Language the talk app listens and speaks in |
+| `JARVIS_WHISPER_MODEL` | `onnx-community/whisper-small` | Speech recognition model for the talk app |
+| `JARVIS_WHISPER` | on | `off` turns speech recognition off |
+| `JARVIS_WHISPER_PRELOAD` | on | `0` loads the model on first use instead of at startup |
+| `JARVIS_PIPER_VOICE` | `nl-rdh-medium` | The talk app's voice, made on this machine by Piper (also `nl-nathalie-x-low`, `nl-mls_5809-low`) |
+| `JARVIS_PIPER_VOICE_EN` | `en-gb-alan-low` | The full interface's fallback voice, in English, when the browser's own voice fails and there is no ElevenLabs key |
+| `JARVIS_PIPER_MODEL` | none | A Piper `.onnx` voice you downloaded yourself, used instead |
+| `JARVIS_PIPER` | on | `off` leaves the talk app on the phone's own voice |
+| `JARVIS_PIPER_PRELOAD` | on | `0` prepares the voice on first use instead of at startup |
+| `JARVIS_PHONE_LANGUAGE` | `nl-NL` | Language callers are heard and answered in |
+| `JARVIS_PHONE_GREETING` | `Ja, meneer?` | What he says when he picks up |
+| `JARVIS_PHONE_TTS_PROVIDER`, `JARVIS_PHONE_VOICE` | Twilio's default | Text-to-speech on calls |
+
+The bridge also reads these from `.env.local`, its own keys only (`JARVIS_*`,
+`TWILIO_*`, `ELEVENLABS_API_KEY`). A value set in the shell wins.
 
 ### Frontend (`.env.local`)
 
 | Variable | Effect |
 |---|---|
 | `VITE_BACKEND` | `bridge` (default) or `direct` |
-| `VITE_BRIDGE_URL` | Where to reach the bridge |
+| `VITE_BRIDGE_URL` | Where to reach the bridge. Default: `ws://localhost:8787` on this machine, the page's own `/bridge` proxy from anywhere else |
 | `VITE_TTS_ENGINE` | `system` or `kokoro` |
 | `VITE_KOKORO_VOICE` | Voice for the Kokoro engine |
 | `VITE_USE_ELEVENLABS` | Force the ElevenLabs voice on |

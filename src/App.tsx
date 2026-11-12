@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Scene } from './scene/Scene'
 import { Hud } from './ui/Hud'
 import { Boot } from './ui/Boot'
@@ -6,9 +6,11 @@ import { Ignition } from './ui/Ignition'
 import { Diagnostics } from './ui/Diagnostics'
 import { useStore } from './store'
 import { startVoice, type Voice, type VoiceMode } from './lib/voice'
-import { createSpeaker, cycleVoice, currentVoiceName } from './lib/tts'
+import { createSpeaker, cycleVoice, currentVoiceName, unlockSpeechOutput } from './lib/tts'
 import * as sfx from './lib/sfx'
 import * as music from './lib/music'
+import { bootSkipped } from './lib/bootSkip'
+import { clearConversation, loadConversation, saveConversation } from './lib/persist'
 import * as hands from './lib/hands'
 import { listenForClap } from './lib/clap'
 import * as camera from './lib/camera'
@@ -25,13 +27,17 @@ import {
   watchCapture,
   watchUi,
   watchConnection,
+  watchOrphanAnswers,
+  newConversation,
+  saveSessionState,
   connectedLabels,
   usingBridge,
   type Msg,
 } from './lib/brain'
-import { startAnalyser, micLevel } from './lib/audio'
+import { getMic, startAnalyser, restartAnalyser, micLevel } from './lib/audio'
+import { keepScreenOn } from './lib/wakeLock'
 import { probeCapabilities } from './lib/capabilities'
-import { env } from './config'
+import { env, BRIDGE_HTTP_URL } from './config'
 
 /**
  * The conversation.
@@ -72,6 +78,14 @@ const LEADING_NAME = new RegExp(`^(?:hey|hi|ok|okay|yo)?\\s*${NAME}\\b[\\s,.:!?-
 export default function App() {
   const store = useStore
   const phase = useStore((s) => s.phase)
+  /** The page was put away (screen locked, app switched) and must be woken. */
+  const [asleep, setAsleep] = useState(false)
+  /**
+   * The conversation this page found on opening — left by a page that was
+   * swiped away. Restored to the screen at once; the tap that starts JARVIS
+   * then continues it, skipping the start-up sequence.
+   */
+  const [saved] = useState(loadConversation)
   const history = useRef<Msg[]>([])
   const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null)
   const voice = useRef<Voice | null>(null)
@@ -82,6 +96,17 @@ export default function App() {
    * the phase, the speaker, or the busy state on its way to the floor.
    */
   const turn = useRef(0)
+  /**
+   * The turn whose voice was cut when the page was put away. Its words keep
+   * arriving (the bridge kept the session) and go on screen, but are not read
+   * out: coming back to the phone should not start him talking mid-answer, or
+   * say again what was already half said.
+   */
+  const silencedTurn = useRef(0)
+  /** A resume in progress, so a second tap or error does not start another. */
+  const resuming = useRef(false)
+  /** The last utterance taken, to drop the same one arriving twice. */
+  const lastHeard = useRef({ text: '', at: 0 })
   const booting = useRef(false)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const voicePoll = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -137,8 +162,12 @@ export default function App() {
     s.pushTurn({ id: newId(), role: 'user', text: said })
     s.setPhase('thinking')
 
+    // One voice at a time: whatever the previous turn was still saying stops
+    // here, so two answers can never be heard over each other.
+    speaker.current?.cancel()
     const spk = createSpeaker()
     speaker.current = spk
+    const silenced = () => silencedTurn.current === mine
     sfx.duck(true)
     music.duck(true)
 
@@ -160,7 +189,7 @@ export default function App() {
             store.getState().pushTurn({ id: turnId, role: 'jarvis', text: '' })
           }
           store.getState().appendToLastTurn(delta)
-          spk.push(delta)
+          if (!silenced()) spk.push(delta)
         },
         onTool: (name) => {
           if (stale()) return
@@ -175,7 +204,7 @@ export default function App() {
           // Say something the moment work starts — a tool can take ten seconds
           // and silence that long reads as a crash. Once per turn only; a
           // chain of five tools shouldn't produce five apologies.
-          if (!filled && !started) {
+          if (!filled && !started && !silenced()) {
             filled = true
             spk.say(forTool(name))
           }
@@ -305,6 +334,25 @@ export default function App() {
       return
     }
 
+    // Starting over, and quitting, are commands — never questions for the model.
+    const command = said.toLowerCase().replace(/[^\p{L}\s]/gu, '').trim()
+    if (/^(nieuw gesprek|nieuwe conversatie|begin opnieuw|new conversation|start over|start a new conversation)$/.test(command)) {
+      startOver(false)
+      return
+    }
+    if (/^(sluit af|afsluiten|stop jarvis|quit|quit jarvis|shut down)$/.test(command)) {
+      startOver(true)
+      return
+    }
+
+    // The same words twice within a moment are one utterance heard by two
+    // listeners (or delivered twice), not two questions. Answering both is
+    // what produced two voices over each other.
+    const key = said.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    const now = Date.now()
+    if (key === lastHeard.current.text && now - lastHeard.current.at < 2500) return
+    lastHeard.current = { text: key, at: now }
+
     void respond(said)
   }
 
@@ -313,6 +361,16 @@ export default function App() {
   }
 
   const onVoiceError = (message: string) => {
+    // On a phone, coming back from another app often ends in the recogniser
+    // being refused the microphone — iOS takes it away from pages in the
+    // background. That is not a verdict, it is a nap: ask for a tap (the one
+    // thing that wins the microphone back) rather than leaving him deaf
+    // behind an error that never clears.
+    const p = store.getState().phase
+    if (/microphone/i.test(message) && p !== 'offline' && p !== 'boot') {
+      if (!resuming.current) setAsleep(true)
+      return
+    }
     store.getState().setError(message)
   }
 
@@ -348,18 +406,27 @@ export default function App() {
 
   const ignite = async () => {
     const s = store.getState()
+    // Coming back to a conversation, not switching on: no fanfare.
+    const quick = saved !== null
 
     // Must happen inside the click handler — browsers won't start an
-    // AudioContext or speech synthesis without a user gesture.
+    // AudioContext or speech synthesis without a user gesture. The speech
+    // output first, before anything awaits: iOS stops counting the tap once
+    // the handler has yielded.
+    unlockSpeechOutput()
+    keepScreenOn()
     await sfx.unlockAudio()
-    sfx.play('boot')
     // The score. Must be started from inside this click handler for the same
     // reason as the rest of the audio.
     music.enable()
-    music.playBoot()
-    music.startAmbient()
-
-    s.setPhase('boot')
+    if (!quick) {
+      sfx.play('boot')
+      music.playBoot()
+      music.startAmbient()
+      s.setPhase('boot')
+    } else {
+      s.setPhase('thinking')
+    }
 
     watchServers((servers) => store.getState().setConnected(servers))
     watchPanels((panel) => store.getState().pushPanel(panel))
@@ -453,12 +520,15 @@ export default function App() {
     // to the socket — so a drop silently wipes his memory while the transcript
     // on screen still shows it. Better to say so than to let him quietly forget.
     watchConnection((state) => {
+      // The bridge keeps the session while the page is away and hands it
+      // back on reconnect, so a drop is a pause, not a loss. Only one that
+      // happens while you are looking is worth a word.
       if (state === 'lost') {
-        store.getState().setError('Bridge connection lost — reconnecting.')
+        if (document.visibilityState === 'visible') {
+          store.getState().setError('Bridge connection lost — reconnecting.')
+        }
       } else if (state === 'reconnected') {
-        store
-          .getState()
-          .setError('Bridge reconnected. The previous conversation was not kept.')
+        store.getState().setError('')
       }
     })
     const warming = warm().catch((err: Error) => s.setError(err.message))
@@ -491,9 +561,15 @@ export default function App() {
     // status bar, rings, suit schematic, reactor power-up — before the live
     // interface takes over. Kept a touch under the boot cue so the music is
     // still rising as the reactor lands.
-    await new Promise((r) => setTimeout(r, 9200)) // boot sequence
+    // The skip button (or Escape) ends the wait at once and cuts the start-up
+    // music short, rather than leaving it playing under the live interface.
+    if (!quick) await Promise.race([
+      new Promise((r) => setTimeout(r, 9200)), // boot sequence
+      bootSkipped().then(() => music.cutBoot()),
+    ])
     await warming
     store.getState().setConnected(connectedLabels())
+    void restoreTranscript()
 
     // The analyser is what makes the reactor pulse with your voice. It needs a
     // getUserMedia stream; speech recognition does not, and gets its own. So a
@@ -527,6 +603,182 @@ export default function App() {
     })
 
     store.getState().setPhase('dormant')
+  }
+
+  /**
+   * The last exchanges, back on screen. The bridge keeps every conversation;
+   * a fresh page — or one reopened on the phone — starts by showing where it
+   * was, so "as I said" has something to point at.
+   */
+  const restoreTranscript = async () => {
+    if (!usingBridge || store.getState().turns.length) return
+    try {
+      const res = await fetch(`${BRIDGE_HTTP_URL}/history?limit=6`)
+      const { exchanges } = (await res.json()) as {
+        exchanges?: { user: string; jarvis: string }[]
+      }
+      for (const e of exchanges ?? []) {
+        store.getState().pushTurn({ id: newId(), role: 'user', text: e.user })
+        store.getState().pushTurn({ id: newId(), role: 'jarvis', text: e.jarvis })
+      }
+    } catch {
+      /* nothing to show */
+    }
+  }
+
+  // -- coming back after the phone slept -------------------------------------
+
+  /**
+   * After the screen has been off or the app put away, a phone has quietly
+   * taken everything: the microphone, the sound, the connection. Nothing
+   * reports it — he simply never hears another word. So when the page comes
+   * back after being hidden, the interface asks for one tap, and that tap (the
+   * gesture iOS insists on before sound may play again) rebuilds the lot in
+   * place: no reload, no start-up sequence, the conversation where it was.
+   */
+  useEffect(() => {
+    let hiddenAt = 0
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now()
+        // Put away: a pause. Stop the voice — only the voice. The session,
+        // the answer being written and the conversation all carry on.
+        silencedTurn.current = turn.current
+        speaker.current?.cancel()
+        return
+      }
+      const away = hiddenAt ? Date.now() - hiddenAt : 0
+      hiddenAt = 0
+      const p = store.getState().phase
+      if (away > 3000 && p !== 'offline' && p !== 'boot') setAsleep(true)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [store])
+
+  // -- the conversation survives the app being swiped away ------------------
+
+  useEffect(() => {
+    // What the last page left on screen, back on screen before anything else.
+    if (saved && !store.getState().turns.length) {
+      for (const t of saved.turns) store.getState().pushTurn(t)
+    }
+
+    // Written down on every change to the conversation (a little later, so a
+    // streaming answer is not written forty times a second)…
+    let timer = 0
+    const save = () => {
+      clearTimeout(timer)
+      timer = 0
+      const st = store.getState()
+      saveConversation(st.turns, st.phase)
+      saveSessionState()
+    }
+    const unsubscribe = store.subscribe((st, prev) => {
+      if (st.turns !== prev.turns && !timer) timer = window.setTimeout(save, 400)
+    })
+    // …and at once when the page is put away or torn down, with the voice
+    // stopped so nothing is left speaking over the next page.
+    const away = () => {
+      speaker.current?.cancel()
+      save()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') away()
+    }
+    window.addEventListener('pagehide', away)
+    document.addEventListener('visibilitychange', onVisibility)
+
+    // An answer the killed page asked for, finished while nobody was here.
+    watchOrphanAnswers((text) => {
+      const st = store.getState()
+      const last = st.turns[st.turns.length - 1]
+      if (last?.role === 'jarvis' && text.startsWith(last.text)) {
+        if (text.length > last.text.length) st.appendToLastTurn(text.slice(last.text.length))
+      } else if (!st.turns.some((t) => t.role === 'jarvis' && t.text === text)) {
+        st.pushTurn({ id: newId(), role: 'jarvis', text })
+      }
+    })
+
+    return () => {
+      unsubscribe()
+      clearTimeout(timer)
+      window.removeEventListener('pagehide', away)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store])
+
+  /**
+   * Starting over is deliberate: "new conversation" (or quitting) ends the
+   * session at the bridge, takes a new session id, and clears the screen and
+   * what was saved. Nothing else ever clears it.
+   */
+  const startOver = (quit: boolean) => {
+    speaker.current?.cancel()
+    newConversation()
+    clearConversation()
+    const st = store.getState()
+    st.clearScreen('all')
+    if (quit) {
+      voice.current?.stop()
+      voice.current = null
+      booting.current = false
+      st.setPhase('offline')
+    } else {
+      st.setPhase('dormant')
+    }
+  }
+
+  const resume = async () => {
+    // Taps arrive in bursts on a phone; one resume at a time.
+    if (resuming.current) return
+    resuming.current = true
+    try {
+      await resumeOnce()
+    } finally {
+      resuming.current = false
+    }
+  }
+
+  const resumeOnce = async () => {
+    setAsleep(false)
+    store.getState().setError('')
+    // Everything that needs the tap, first, before anything awaits — the
+    // microphone above all, which iOS only grants inside the tap itself.
+    const mic = getMic().catch(() => null)
+    unlockSpeechOutput()
+    keepScreenOn()
+    music.enable()
+    await sfx.unlockAudio()
+    speaker.current?.cancel()
+    voice.current?.stop()
+    voice.current = null
+    void warm().catch(() => {})
+    await mic
+    try {
+      await restartAnalyser()
+    } catch {
+      /* the reactor just will not pulse */
+    }
+    try {
+      voice.current = await startVoice({
+        mode,
+        onWake,
+        onSpeechStart,
+        onPartial,
+        onUtterance,
+        onError: onVoiceError,
+      })
+    } catch (err) {
+      store.getState().setError(String((err as Error)?.message ?? err))
+    }
+    // An answer still being written finishes on its own and sets the phase
+    // itself; only an idle interface goes back to waiting for its name.
+    const p = store.getState().phase
+    if (p !== 'thinking' && p !== 'tooling' && p !== 'speaking') {
+      store.getState().setPhase('dormant')
+    }
   }
 
   // -- clap to start --------------------------------------------------------
@@ -703,7 +955,14 @@ export default function App() {
       <Hud />
       <Boot />
       <Diagnostics />
-      <Ignition onStart={() => void powerOn()} />
+      <Ignition onStart={() => void powerOn()} resume={saved !== null} />
+      {asleep && (
+        <button type="button" className="wake-overlay" onClick={() => void resume()}>
+          <span className="wake-ring" aria-hidden="true" />
+          <span className="wake-word">TIK OM VERDER TE GAAN</span>
+          <span className="wake-sub">Jarvis was in slaap gezet door je telefoon</span>
+        </button>
+      )}
     </>
   )
 }

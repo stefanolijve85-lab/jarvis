@@ -857,6 +857,113 @@ kbd {
   overflow: hidden;
 }
 
+/* -- the room: grid, glow, scan lines, corners, readout, skip ---------- */
+
+.boot-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 55%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%),
+    linear-gradient(color-mix(in srgb, var(--accent) 7%, transparent) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 7%, transparent) 1px, transparent 1px) 0 0 / 48px 48px;
+  mask-image: radial-gradient(ellipse at 50% 55%, #000 30%, transparent 78%);
+  animation: bootBgIn 1.2s ease both;
+}
+@keyframes bootBgIn { from { opacity: 0; transform: scale(1.06) } }
+
+.boot-scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0 2px,
+    color-mix(in srgb, var(--accent) 5%, transparent) 2px 3px
+  );
+  opacity: 0.5;
+}
+.boot-scan::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 120px;
+  background: linear-gradient(transparent, color-mix(in srgb, var(--accent) 10%, transparent), transparent);
+  animation: bootSweep 3.2s linear infinite;
+}
+@keyframes bootSweep { from { top: -120px } to { top: 100% } }
+
+.boot-corners span {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  border: 0 solid color-mix(in srgb, var(--accent) 70%, transparent);
+  filter: drop-shadow(0 0 6px var(--accent));
+  animation: bootCornerIn 0.7s ease both;
+}
+.boot-corners .boot-c-tl { top: 18px; left: 18px; border-width: 2px 0 0 2px; }
+.boot-corners .boot-c-tr { top: 18px; right: 18px; border-width: 2px 2px 0 0; }
+.boot-corners .boot-c-bl { bottom: 18px; left: 18px; border-width: 0 0 2px 2px; }
+.boot-corners .boot-c-br { bottom: 18px; right: 18px; border-width: 0 2px 2px 0; }
+@keyframes bootCornerIn { from { opacity: 0; transform: scale(1.6) } }
+
+.boot-readout {
+  position: absolute;
+  left: 84px;
+  bottom: 30px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: color-mix(in srgb, var(--accent) 75%, transparent);
+}
+.boot-readout b {
+  font-weight: 300;
+  font-size: 22px;
+  color: #eafcff;
+  text-shadow: 0 0 16px var(--accent);
+}
+.boot-readout-stage { opacity: 0.6; }
+
+.boot-skip {
+  position: absolute;
+  right: 80px;
+  bottom: 24px;
+  z-index: 2;
+  padding: 10px 18px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.24em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+.boot-skip:hover,
+.boot-skip:focus-visible {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: none;
+}
+
+/* The boot SVGs are drawn around (0,0) — their viewBox is centred on it — and
+   with transform-box: view-box the origin is the viewBox's own (0,0), not its
+   middle-by-percentage. So 0 0 is the centre; 'center' would orbit. */
+.boot-spin { animation: bootSpin 26s linear infinite; transform-box: view-box; transform-origin: 0 0; }
+.boot-spin-rev { animation: bootSpin 18s linear infinite reverse; transform-box: view-box; transform-origin: 0 0; }
+.boot-spin-fast { animation: bootSpin 7s linear infinite; transform-box: view-box; transform-origin: 0 0; }
+.boot-callout .boot-spin,
+.boot-callout .boot-spin-rev { transform-box: fill-box; transform-origin: 50% 50%; }
+@keyframes bootSpin { to { transform: rotate(360deg) } }
+
+.boot-tick { stroke: color-mix(in srgb, var(--accent) 40%, transparent); stroke-width: 1; }
+.boot-tick-long { stroke: var(--accent); stroke-width: 2; }
+
 /* -- beat 1: the status bar -------------------------------------------- */
 
 .boot-bar {
@@ -936,8 +1043,8 @@ kbd {
 .boot-rings,
 .boot-suit,
 .boot-reactor {
-  width: min(58vmin, 520px);
-  height: min(58vmin, 520px);
+  width: min(70vmin, 600px);
+  height: min(70vmin, 600px);
   overflow: visible;
 }
 
@@ -997,6 +1104,27 @@ kbd {
 .boot-r-tri-in {
   fill: color-mix(in srgb, #eafcff calc(var(--glow) * 60%), transparent);
   stroke: none;
+}
+.boot-r-arc {
+  fill: none;
+  stroke: color-mix(in srgb, var(--accent) calc(45% + var(--glow) * 50%), transparent);
+  stroke-linecap: butt;
+  filter: drop-shadow(0 0 calc(var(--glow) * 10px) var(--accent));
+}
+.boot-r-arc-thin { stroke: #eafcff; opacity: calc(0.3 + var(--glow) * 0.7); }
+.boot-shock {
+  fill: none;
+  stroke: #eafcff;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 12px var(--accent));
+}
+.boot-r-label {
+  fill: #eafcff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.32em;
+  text-anchor: middle;
+  opacity: 0.85;
 }
 .boot-r-v {
   fill: none;
@@ -1897,4 +2025,82 @@ kbd {
   object-fit: cover;
   transform: scaleX(-1);
   background: #000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-scan::after,
+  .boot-bg,
+  .boot-corners span,
+  .boot-spin,
+  .boot-spin-rev,
+  .boot-spin-fast {
+    animation: none !important;
+  }
+}
+
+/* On a phone the counter and the skip button stack in the middle, clear of
+   the corner brackets and of each other. */
+@media (max-width: 640px) {
+  .boot-readout {
+    left: 50%;
+    bottom: 86px;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .boot-skip {
+    right: auto;
+    left: 50%;
+    bottom: 30px;
+    transform: translateX(-50%);
+  }
+}
+
+
+/* -------------------------------------------------- waking after the phone slept */
+
+.wake-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  border: 0;
+  padding: 24px;
+  background: radial-gradient(ellipse at center, rgba(1, 12, 20, 0.72), rgba(1, 6, 12, 0.94));
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  backdrop-filter: blur(6px);
+}
+.wake-ring {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 55%, transparent),
+    inset 0 0 24px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: wakePulse 1.6s ease-in-out infinite;
+}
+.wake-word {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  letter-spacing: 0.3em;
+  color: #eafcff;
+  text-shadow: 0 0 18px var(--accent);
+  text-align: center;
+}
+.wake-sub {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.6;
+  text-align: center;
+}
+@keyframes wakePulse {
+  50% { transform: scale(0.9); opacity: 0.7; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wake-ring { animation: none; }
 }

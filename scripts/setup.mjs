@@ -7,7 +7,7 @@
 // there, and the script always exits 0 — it is advice, not a gate.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,6 +101,38 @@ if (elSource) {
 } else {
   line(info, 'No ElevenLabs key found — JARVIS will use browser speech (that is completely fine).');
   line(info, '  Optional: add ELEVENLABS_API_KEY for a better voice and Scribe transcription. The free tier is enough for a demo.');
+}
+
+// --- Remote access and the phone line (optional) -------------------------
+const tailscaleApp = [
+  '/Applications/Tailscale.app/Contents/MacOS/Tailscale',
+  '/usr/local/bin/tailscale',
+  '/opt/homebrew/bin/tailscale',
+  '/usr/bin/tailscale',
+].find((p) => existsSync(p));
+let tailscaleFound = Boolean(tailscaleApp);
+if (!tailscaleFound) {
+  tailscaleFound = spawnSync('tailscale', ['version'], { stdio: 'ignore' }).status === 0;
+}
+line(
+  info,
+  tailscaleFound
+    ? 'Tailscale found — `npm run remote` makes JARVIS reachable from your phone.'
+    : 'Optional: install Tailscale (tailscale.com/download) to reach JARVIS from anywhere.',
+);
+
+const envLocal = existsSync('.env.local') ? readFileSync('.env.local', 'utf8') : '';
+const has = (key) =>
+  Boolean(process.env[key]) || new RegExp(`^\\s*${key}\\s*=\\s*\\S`, 'm').test(envLocal);
+if (has('TWILIO_ACCOUNT_SID') && has('TWILIO_AUTH_TOKEN') && has('JARVIS_OWNER_PHONE')) {
+  line(
+    tick,
+    `Phone line configured — WhatsApp${has('TWILIO_PHONE_NUMBER') ? ' and calls' : ''} (start with \`npm run remote\`).`,
+  );
+} else if (has('TWILIO_ACCOUNT_SID') || has('TWILIO_AUTH_TOKEN') || has('JARVIS_OWNER_PHONE')) {
+  line(warn, 'Phone line half set up: it needs TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and JARVIS_OWNER_PHONE.');
+} else {
+  line(info, 'Optional: a Twilio account lets JARVIS call you and chat on WhatsApp (see README).');
 }
 
 // --- How to run ----------------------------------------------------------

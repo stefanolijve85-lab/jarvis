@@ -18,7 +18,7 @@ const SERVER = fileURLToPath(new URL('../bridge/server.mjs', import.meta.url))
 /** Start a bridge on a free port; resolves once it says where it is listening. */
 function startBridge(env = {}) {
   const child = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, JARVIS_BRIDGE_PORT: '0', ...env },
+    env: { ...process.env, JARVIS_BRIDGE_PORT: '0', JARVIS_WHISPER_PRELOAD: '0', JARVIS_PIPER_PRELOAD: '0', JARVIS_SKIP_ENV_FILE: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
