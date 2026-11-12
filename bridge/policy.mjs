@@ -160,6 +160,9 @@ export function decideTool(name, allowWrites = false) {
     if (server === 'jarvis_phone') return true
     // Telegram, likewise: the bot only ever writes to its one linked owner.
     if (server === 'jarvis_telegram') return true
+    // WhatsApp gates itself: messaging anyone but the owner is refused inside
+    // the tool unless writes are on, and the persona asks for a yes first.
+    if (server === 'jarvis_whatsapp') return true
     // Memory writes only its own notes file in ~/.jarvis.
     if (server === 'jarvis_memory') return true
 

@@ -206,7 +206,7 @@ const LIMITS = { call: 6, message: 40 }
  *                   phone gets the same model, tools and permission gate as the
  *                   browser.
  */
-export function createPhoneLine(cfg, converse) {
+export function createPhoneLine(cfg, converse, { routes = new Map() } = {}) {
   const sent = { call: [], message: [] }
   const scheduled = new Map()
   const tokens = new Map()
@@ -442,7 +442,11 @@ export function createPhoneLine(cfg, converse) {
 
   async function handle(req, res) {
     const path = (req.url ?? '/').split('?')[0]
-    if (req.method !== 'POST' || (path !== '/twilio/voice' && path !== '/twilio/whatsapp')) {
+    // Other services sharing this public endpoint (WhatsApp's Cloud API) bring
+    // their own routes and their own checks.
+    const route = routes.get(path)
+    if (route) return route(req, res)
+    if (!cfg.canReceive || req.method !== 'POST' || (path !== '/twilio/voice' && path !== '/twilio/whatsapp')) {
       res.writeHead(404)
       return res.end()
     }
@@ -556,7 +560,7 @@ export function createPhoneLine(cfg, converse) {
 
   /** Starts the public endpoint, if there is anything for it to receive. */
   async function listen() {
-    if (!cfg.canReceive) return null
+    if (!cfg.canReceive && !routes.size) return null
     const server = createServer((req, res) => {
       handle(req, res).catch((err) => {
         console.error('[jarvis] phone request failed:', err)

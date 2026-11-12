@@ -190,9 +190,13 @@ function remoteSetup(bridgeEnv) {
 /** Whether .env.local or the shell carries a Twilio account. */
 function phoneConfigured() {
   if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) return true
+  if (process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_APP_SECRET) return true
   try {
     const text = existsSync('.env.local') ? readFileSync('.env.local', 'utf8') : ''
-    return /^\s*TWILIO_ACCOUNT_SID\s*=\s*\S/m.test(text) && /^\s*TWILIO_AUTH_TOKEN\s*=\s*\S/m.test(text)
+    return (
+      (/^\s*TWILIO_ACCOUNT_SID\s*=\s*\S/m.test(text) && /^\s*TWILIO_AUTH_TOKEN\s*=\s*\S/m.test(text)) ||
+      (/^\s*WHATSAPP_TOKEN\s*=\s*\S/m.test(text) && /^\s*WHATSAPP_APP_SECRET\s*=\s*\S/m.test(text))
+    )
   } catch {
     return false
   }

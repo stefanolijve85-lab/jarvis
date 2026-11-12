@@ -374,6 +374,46 @@ with a key, otherwise Piper) as well as the text. *"Call me in ten minutes"*
 sends a notification with a button that opens the talk app. *"Send me that"*
 messages you. Anyone else who finds the bot gets no answer.
 
+### WhatsApp on your own business number (Meta Cloud API)
+
+This is WhatsApp straight from Meta, with no Twilio. People see your own number,
+name and picture. JARVIS can message you, and, after you say yes, other people
+in your name.
+
+1. In **Meta Business Manager** (business.facebook.com), create a WhatsApp
+   Business account and **add a phone number**: a number that is not already on
+   WhatsApp. Its display name and profile picture are yours to set there, and
+   Meta reviews the display name.
+2. In **developers.facebook.com**, create an app of type *Business*, add the
+   **WhatsApp** product, and note the **Phone number ID** (not the number). In
+   Business settings, add a **System user**, give it the app and the WhatsApp
+   account, and generate a **permanent token** with
+   `whatsapp_business_messaging` and `whatsapp_business_management`.
+3. In `.env.local`:
+
+   ```bash
+   WHATSAPP_TOKEN=...
+   WHATSAPP_PHONE_NUMBER_ID=...
+   WHATSAPP_TO=+31612345678        # you
+   WHATSAPP_VERIFY_TOKEN=any-long-random-string
+   WHATSAPP_APP_SECRET=...          # App settings → Basic → App secret
+   ```
+
+4. To receive messages: `npm run remote` publishes the phone line through
+   Tailscale Funnel. In the app's **WhatsApp → Configuration**, set the
+   callback URL to `https://<your-machine>.ts.net:8443/whatsapp/webhook`, use
+   the same verify token, and subscribe to **messages**.
+
+WhatsApp's own rule applies: free text reaches someone only within 24 hours of
+their last message to you. Outside that window JARVIS uses an **approved
+template** (`whatsapp_template`), which you create under *Message templates* in
+Business Manager. When a send fails for that reason, he says so and offers a
+template. Messaging anyone but you needs `JARVIS_ALLOW_WRITES=1`, and he states
+the recipient and text and waits for your yes. Webhooks are checked against
+Meta's signature, and only your own number's messages reach the agent. With
+the Cloud API set up, Twilio's WhatsApp is switched off (Twilio stays for
+calls).
+
 ### 2. Twilio — calls and WhatsApp
 
 1. Make an account at <https://www.twilio.com>. A trial account works for
@@ -472,6 +512,11 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | `TWILIO_WHATSAPP_FROM` | `+14155238886` | The WhatsApp sender (the sandbox by default) |
 | `JARVIS_PHONE_PUBLIC_URL` | from Funnel | Where Twilio reaches the phone line; `npm run remote` fills it in |
 | `JARVIS_PHONE_PORT` | `8788` | Local port of the phone line |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` | none | Meta Cloud API: turns WhatsApp on (replaces Twilio's) |
+| `WHATSAPP_TO` | `JARVIS_OWNER_PHONE` | Your own number, the default recipient |
+| `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET` | none | Receiving: the webhook's verify token and the app secret its signature is checked with |
+| `WHATSAPP_API_VERSION` | `v20.0` | Graph API version |
+| `JARVIS_PARK_MINUTES` | `720` | How long a session waits for its app to come back |
 | `TELEGRAM_BOT_TOKEN` | none | The bot's token from @BotFather; turns Telegram on |
 | `TELEGRAM_OWNER_ID` | from pairing | Your Telegram user id, instead of pairing with `/start <code>` |
 | `JARVIS_MEMORY` | on | `off` turns the memory off |
