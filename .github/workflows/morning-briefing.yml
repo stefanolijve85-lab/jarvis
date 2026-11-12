@@ -1,0 +1,28 @@
+name: Morning briefing
+
+on:
+  schedule:
+    # 07:00 UTC is 08:00 in the Netherlands in winter (CET).
+    # In summer (CEST) change to "0 6 * * *".
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and send briefing
+        env:
+          TG_BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          W=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=52.78&longitude=6.90&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe%2FAmsterdam&forecast_days=1")
+          MAX=$(echo "$W" | jq -r '.daily.temperature_2m_max[0]')
+          MIN=$(echo "$W" | jq -r '.daily.temperature_2m_min[0]')
+          RAIN=$(echo "$W" | jq -r '.daily.precipitation_sum[0]')
+          TEXT="Good morning, Stefan. Emmen today: ${MIN} to ${MAX} degrees, rain ${RAIN} mm.
+          Health: walk for twenty minutes, drink water before coffee.
+          Happiness: message one person you have not spoken to this week."
+          curl -s "https://api.telegram.org/bot${TG_BOT}/sendMessage" \
+            --data-urlencode "chat_id=${TG_CHAT}" \
+            --data-urlencode "text=${TEXT}"
