@@ -411,6 +411,11 @@ export function createTelegram(cfg, converse, voice) {
     stop: () => {
       stopped = true
     },
+    /** A message to the owner, with optional Telegram extras (buttons…). */
+    send: (text, extra) => sendText(text, extra),
+    /** The same text as a voice note, when there is a voice and ffmpeg. */
+    sendVoice: (text) => (hasFfmpeg() ? sendVoiceNote(text) : Promise.resolve(false)),
+    talkUrl: cfg.talkUrl,
     tools,
     linked: () => Boolean(owner),
     pairingCode: () => pairing,

@@ -165,6 +165,8 @@ export function decideTool(name, allowWrites = false) {
     if (server === 'jarvis_whatsapp') return true
     // Memory writes only its own notes file in ~/.jarvis.
     if (server === 'jarvis_memory') return true
+    // The briefing only ever writes to the owner's own Telegram/WhatsApp.
+    if (server === 'jarvis_briefing') return true
 
     const tool = mcpToolOf(name)
     if (EFFECTFUL_VERB.test(tool) && !VETO_EXEMPT.has(`${server}__${tool}`)) {
