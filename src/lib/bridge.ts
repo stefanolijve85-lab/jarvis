@@ -20,6 +20,10 @@ import { BRIDGE_WS_URL } from '../config'
  *  bridge build should be ignored, not crash the turn. */
 type Frame = {
   type?: string
+  /** The frame's number in its session; see lastSeq. */
+  seq?: number
+  /** On 'ready': this is the session the page had before, picked up again. */
+  resumed?: boolean
   delta?: string
   name?: string
   text?: string
@@ -168,6 +172,14 @@ function dispatch(ws: WebSocket) {
       return
     }
 
+    // Keep count of what has arrived. A fresh session starts the count again;
+    // the 'ready' of a resumed one carries the bridge's own count, which the
+    // replayed frames after it have not reached yet, so it is not counted.
+    if (typeof msg.seq === 'number') {
+      if (msg.type === 'ready' && !msg.resumed) lastSeq = msg.seq
+      else if (msg.type !== 'ready') lastSeq = Math.max(lastSeq, msg.seq)
+    }
+
     if (msg.type === 'ready') {
       // The bridge announces immediately on connect from Claude Code's config,
       // then again with live status once the agent initialises. Keep listening
@@ -211,6 +223,44 @@ function dispatch(ws: WebSocket) {
   })
 }
 
+/**
+ * Who this page is to the bridge, for as long as the tab lives.
+ *
+ * A phone drops the socket whenever the page is put away. With this id the
+ * bridge keeps the session through that, and the reconnect picks up the same
+ * conversation — and any answer that was being written — instead of a new one.
+ * Kept in sessionStorage so a reload of the same tab is the same client too.
+ */
+function sessionId(): string {
+  const make = () =>
+    (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '')
+  try {
+    let id = sessionStorage.getItem('jarvis-sid')
+    if (!id) {
+      id = make()
+      sessionStorage.setItem('jarvis-sid', id)
+    }
+    return id
+  } catch {
+    return (sessionIdFallback ??= make())
+  }
+}
+let sessionIdFallback: string | null = null
+
+/**
+ * The number of the last frame this page received. Sent on reconnect, so the
+ * bridge replays exactly what was missed — nothing lost in the drop, nothing
+ * doubled.
+ */
+let lastSeq = 0
+
+function socketUrl(): string {
+  const url = new URL(BRIDGE_WS_URL)
+  url.searchParams.set('sid', sessionId())
+  if (lastSeq > 0) url.searchParams.set('since', String(lastSeq))
+  return url.toString()
+}
+
 function connect(): Promise<WebSocket> {
   if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(socket)
   if (connecting) return connecting
@@ -218,7 +268,7 @@ function connect(): Promise<WebSocket> {
   firstReady = deferred()
 
   connecting = new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(BRIDGE_WS_URL)
+    const ws = new WebSocket(socketUrl())
     let settled = false
 
     /**
@@ -376,9 +426,7 @@ export async function ask(
       done = true
       pending = null
       clearTimeout(timer)
-      ws.removeEventListener('message', onMessage)
-      ws.removeEventListener('close', onClose)
-      ws.removeEventListener('error', onError)
+      unlisten(current)
     }
 
     const finish = (fallback = '') => {
@@ -453,17 +501,49 @@ export async function ask(
       }
     }
 
+    /**
+     * The socket went — usually the phone putting the page away. The bridge
+     * keeps the session and holds what it writes meanwhile, so this turn waits
+     * for the reconnect and carries on on the new socket rather than failing.
+     * Only if the bridge cannot be reached again does the turn give up.
+     */
+    let current = ws
+    const listen = (sock: WebSocket) => {
+      current = sock
+      sock.addEventListener('message', onMessage)
+      sock.addEventListener('close', onClose)
+      sock.addEventListener('error', onError)
+    }
+    const unlisten = (sock: WebSocket) => {
+      sock.removeEventListener('message', onMessage)
+      sock.removeEventListener('close', onClose)
+      sock.removeEventListener('error', onError)
+    }
     const onClose = () => {
-      fail(new Error('The bridge disconnected mid-answer — that session is gone.'))
+      if (done) return
+      unlisten(current)
+      void (async () => {
+        const until = Date.now() + 60_000
+        while (!done && Date.now() < until) {
+          try {
+            const next = await connect()
+            if (done) return
+            listen(next)
+            arm()
+            return
+          } catch {
+            await new Promise((r) => setTimeout(r, 1500))
+          }
+        }
+        fail(new Error('The bridge disconnected mid-answer and could not be reached again.'))
+      })()
     }
     const onError = () => {
-      fail(new Error('The connection to the bridge failed.'))
+      /* a close follows an error; the close decides */
     }
 
     pending = { finish }
-    ws.addEventListener('message', onMessage)
-    ws.addEventListener('close', onClose)
-    ws.addEventListener('error', onError)
+    listen(ws)
     arm()
 
     try {

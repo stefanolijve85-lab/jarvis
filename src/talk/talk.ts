@@ -104,9 +104,29 @@ let asked = 0
 let current: string | null = null
 let answerEl: HTMLElement | null = null
 
+/** This tab, to the bridge: the same id keeps the same session across drops. */
+function sessionId() {
+  try {
+    let id = sessionStorage.getItem('jarvis-talk-sid')
+    if (!id) {
+      id = (crypto.randomUUID?.() ?? `${Date.now()}${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '')
+      sessionStorage.setItem('jarvis-talk-sid', id)
+    }
+    return id
+  } catch {
+    return ''
+  }
+}
+
+/** The last frame received, so a reconnect is replayed exactly what it missed. */
+let lastSeq = 0
+
 function wsUrl() {
   const url = new URL(BRIDGE_WS_URL)
   url.searchParams.set('mode', 'talk')
+  const sid = sessionId()
+  if (sid) url.searchParams.set('sid', sid)
+  if (lastSeq > 0) url.searchParams.set('since', String(lastSeq))
   return url.toString()
 }
 
@@ -120,13 +140,30 @@ function connect() {
     retry = 0
   }
   ws.onmessage = (event) => {
-    let msg: { type: string; ask?: string | null; delta?: string; text?: string; message?: string }
+    let msg: {
+      type: string
+      ask?: string | null
+      delta?: string
+      text?: string
+      message?: string
+      seq?: number
+      resumed?: boolean
+    }
     try {
       msg = JSON.parse(String(event.data))
     } catch {
       return
     }
+    if (typeof msg.seq === 'number') {
+      if (msg.type === 'ready' && !msg.resumed) lastSeq = msg.seq
+      else if (msg.type !== 'ready') lastSeq = Math.max(lastSeq, msg.seq)
+    }
     if (msg.type === 'ready') {
+      // Back on a fresh session rather than the one we left: an answer that
+      // was being waited for is not coming.
+      if (!(msg as { resumed?: boolean }).resumed && current && (phase === 'thinking' || phase === 'speaking')) {
+        onFailed('De verbinding viel weg.')
+      }
       ready = true
       linkEl.dataset.state = 'up'
       linkText.textContent = 'verbonden'
@@ -143,7 +180,8 @@ function connect() {
     ready = false
     linkEl.dataset.state = 'down'
     linkText.textContent = 'geen verbinding'
-    if (phase === 'thinking' || phase === 'speaking') onFailed('De verbinding viel weg.')
+    // A drop is usually the phone putting the page away. The bridge keeps the
+    // session and what it says meanwhile; the reconnect below picks it up.
     setTimeout(connect, Math.min(10_000, 500 * 2 ** retry++))
   }
 }

@@ -1712,18 +1712,58 @@ const RESULT_FAILURES = {
   default: 'The turn ended without an answer.',
 }
 
+/**
+ * Sessions that outlive their socket.
+ *
+ * A phone puts a page away all the time — the app switcher, a call, the screen
+ * locking — and every time, the socket drops. Closing the agent session with
+ * it threw away the conversation and the answer being written, and the page
+ * came back to a stranger. So a client that names itself (?sid=…, kept per
+ * tab) gets its session parked instead: the agent carries on, what it says is
+ * held, and when the same client reconnects it is re-attached and handed what
+ * it missed. Parked sessions are closed after PARK_MS without a client.
+ */
+const sessions = new Map()
+const PARK_MS = 15 * 60 * 1000
+const MAX_HELD = 2000
+
 wss.on('connection', (socket, req) => {
+  const params = new URL(req.url ?? '/', 'http://x').searchParams
   // The talk app (talk.html) connects with ?mode=talk: the same agent, with no
   // interface to draw on, so it gets the talk prompt and none of the screen
   // tools instead of being told to put things on blades nobody can see.
-  const talk = new URL(req.url ?? '/', 'http://x').searchParams.get('mode') === 'talk'
+  const talk = params.get('mode') === 'talk'
+  const sidRaw = params.get('sid') ?? ''
+  const sid = /^[A-Za-z0-9_-]{8,64}$/.test(sidRaw) ? `${talk ? 't' : 'i'}:${sidRaw}` : null
+
+  // The same client, back: hand it the session it left, from the last frame it
+  // actually received.
+  const existing = sid ? sessions.get(sid) : null
+  if (existing) {
+    const since = Number(params.get('since'))
+    existing.attach(socket, Number.isFinite(since) && since >= 0 ? since : null)
+    return
+  }
   console.log(`[jarvis] client connected${talk ? ' (talk app)' : ''}`)
+
+  /** The socket this session talks through now; null while it is parked. */
+  let link = socket
+  /**
+   * Every frame is numbered and the recent ones kept, so a client that comes
+   * back can be given everything after the last one it actually received.
+   * Holding only what was sent while parked was not enough: frames written
+   * while the socket was already closing on the far side were "sent" and lost.
+   */
+  let seq = 0
+  const recent = []
+  let parkedAt = 0
+  let parkTimer = null
+  /** The last 'ready' frame, repeated to a client that re-attaches. */
+  let lastReady = { type: 'ready', servers: Object.keys(MCP_SERVERS) }
 
   // Answer the HUD straight away rather than making it wait for the agent's
   // first turn. Refined later by the real init message.
-  socket.send(
-    JSON.stringify({ type: 'ready', servers: Object.keys(MCP_SERVERS) }),
-  )
+  socket.send(JSON.stringify(lastReady))
 
   /** Resolves the pending user message into the SDK's input generator. */
   let deliver = null
@@ -1747,7 +1787,15 @@ wss.on('connection', (socket, req) => {
   }
 
   const send = (msg) => {
-    if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg))
+    if (msg.type === 'ready') lastReady = msg
+    const frame = { ...msg, seq: ++seq }
+    if (sid) {
+      // Kept for a client that comes back. A runaway turn cannot grow this
+      // without limit; the oldest frames go first.
+      recent.push(frame)
+      if (recent.length > MAX_HELD) recent.shift()
+    }
+    if (link && link.readyState === link.OPEN) link.send(JSON.stringify(frame))
   }
 
   /**
@@ -1778,7 +1826,7 @@ wss.on('connection', (socket, req) => {
 
   const ask = (kind, args, timeoutMs = 20_000) =>
     new Promise((resolve, reject) => {
-      if (socket.readyState !== socket.OPEN) {
+      if (!link || link.readyState !== link.OPEN) {
         return reject(new Error('the interface is not connected'))
       }
       const id = `q${++asks}`
@@ -2060,11 +2108,12 @@ wss.on('connection', (socket, req) => {
       closed = true
       deliver?.(null)
       session.close?.()
-      socket.close()
+      if (sid) sessions.delete(sid)
+      link?.close()
     }
   })()
 
-  socket.on('message', (raw) => {
+  const onSocketMessage = (raw) => {
     let msg
     try {
       msg = JSON.parse(raw.toString())
@@ -2125,12 +2174,54 @@ wss.on('connection', (socket, req) => {
           ]),
         )
     }
-  })
+  }
 
-  socket.on('close', () => {
-    console.log('[jarvis] client disconnected')
+  /** The session is over for good: stop the agent and forget it. */
+  const teardown = () => {
+    clearTimeout(parkTimer)
     closed = true
     deliver?.(null)
     session.close?.()
-  })
+    if (sid && sessions.get(sid)?.attach === attach) sessions.delete(sid)
+  }
+
+  const bind = (sock) => {
+    link = sock
+    sock.on('message', onSocketMessage)
+    sock.on('close', () => {
+      // A socket this session has already moved on from is of no interest.
+      if (sock !== link) return
+      link = null
+      if (!sid || closed) {
+        console.log('[jarvis] client disconnected')
+        teardown()
+        return
+      }
+      parkedAt = seq
+      console.log('[jarvis] client away — keeping the session for 15 minutes')
+      clearTimeout(parkTimer)
+      parkTimer = setTimeout(() => {
+        console.log('[jarvis] client did not come back — session closed')
+        teardown()
+      }, PARK_MS)
+      parkTimer.unref?.()
+    })
+  }
+
+  /** The client is back (or a second tab took over): continue where it was. */
+  function attach(sock, since) {
+    clearTimeout(parkTimer)
+    const previous = link
+    bind(sock)
+    // A tab that took over from a live one: the old socket is retired.
+    if (previous && previous !== sock) previous.close()
+    const from = since ?? parkedAt
+    const missed = recent.filter((f) => f.seq > from)
+    console.log(`[jarvis] client back — resuming its session${missed.length ? `, ${missed.length} missed frame(s)` : ''}`)
+    sock.send(JSON.stringify({ ...lastReady, resumed: true, seq }))
+    for (const frame of missed) sock.send(JSON.stringify(frame))
+  }
+
+  bind(socket)
+  if (sid) sessions.set(sid, { attach })
 })

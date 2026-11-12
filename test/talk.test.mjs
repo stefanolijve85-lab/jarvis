@@ -139,3 +139,47 @@ test('Whisper phantoms are dropped and real words kept', () => {
   assert.equal(whisperLanguage('nl-NL'), 'nl')
   assert.equal(whisperLanguage('en_GB'), 'en')
 })
+
+// ------------------------------------------------- sessions outlive sockets
+
+const openWs = (port, query) =>
+  new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws${query}`, { origin: 'http://localhost:5173' })
+    ws.once('message', (m) => resolve({ ws, first: JSON.parse(String(m)) }))
+    ws.once('error', reject)
+  })
+
+test('a client that comes back with its id gets its session back', async () => {
+  const a = await openWs(on.port, '?sid=testclient123')
+  assert.equal(a.first.type, 'ready')
+  assert.equal(a.first.resumed, undefined)
+  a.ws.close()
+  await new Promise((r) => setTimeout(r, 200))
+
+  const b = await openWs(on.port, '?sid=testclient123')
+  assert.equal(b.first.type, 'ready')
+  assert.equal(b.first.resumed, true)
+  b.ws.close()
+})
+
+test('another id, or none, starts a session of its own', async () => {
+  const other = await openWs(on.port, '?sid=someoneelse456')
+  assert.equal(other.first.resumed, undefined)
+  other.ws.close()
+  const none = await openWs(on.port, '')
+  assert.equal(none.first.resumed, undefined)
+  none.ws.close()
+  // A malformed id is ignored rather than trusted.
+  const odd = await openWs(on.port, '?sid=../../etc')
+  assert.equal(odd.first.resumed, undefined)
+  odd.ws.close()
+})
+
+test('the talk app and the interface never share a session', async () => {
+  const i = await openWs(on.port, '?sid=sharedid7890')
+  i.ws.close()
+  await new Promise((r) => setTimeout(r, 200))
+  const t = await openWs(on.port, '?mode=talk&sid=sharedid7890')
+  assert.equal(t.first.resumed, undefined)
+  t.ws.close()
+})

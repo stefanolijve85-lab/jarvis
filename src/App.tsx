@@ -86,6 +86,17 @@ export default function App() {
    * the phase, the speaker, or the busy state on its way to the floor.
    */
   const turn = useRef(0)
+  /**
+   * The turn whose voice was cut when the page was put away. Its words keep
+   * arriving (the bridge kept the session) and go on screen, but are not read
+   * out: coming back to the phone should not start him talking mid-answer, or
+   * say again what was already half said.
+   */
+  const silencedTurn = useRef(0)
+  /** A resume in progress, so a second tap or error does not start another. */
+  const resuming = useRef(false)
+  /** The last utterance taken, to drop the same one arriving twice. */
+  const lastHeard = useRef({ text: '', at: 0 })
   const booting = useRef(false)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const voicePoll = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -141,8 +152,12 @@ export default function App() {
     s.pushTurn({ id: newId(), role: 'user', text: said })
     s.setPhase('thinking')
 
+    // One voice at a time: whatever the previous turn was still saying stops
+    // here, so two answers can never be heard over each other.
+    speaker.current?.cancel()
     const spk = createSpeaker()
     speaker.current = spk
+    const silenced = () => silencedTurn.current === mine
     sfx.duck(true)
     music.duck(true)
 
@@ -164,7 +179,7 @@ export default function App() {
             store.getState().pushTurn({ id: turnId, role: 'jarvis', text: '' })
           }
           store.getState().appendToLastTurn(delta)
-          spk.push(delta)
+          if (!silenced()) spk.push(delta)
         },
         onTool: (name) => {
           if (stale()) return
@@ -179,7 +194,7 @@ export default function App() {
           // Say something the moment work starts — a tool can take ten seconds
           // and silence that long reads as a crash. Once per turn only; a
           // chain of five tools shouldn't produce five apologies.
-          if (!filled && !started) {
+          if (!filled && !started && !silenced()) {
             filled = true
             spk.say(forTool(name))
           }
@@ -309,6 +324,14 @@ export default function App() {
       return
     }
 
+    // The same words twice within a moment are one utterance heard by two
+    // listeners (or delivered twice), not two questions. Answering both is
+    // what produced two voices over each other.
+    const key = said.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    const now = Date.now()
+    if (key === lastHeard.current.text && now - lastHeard.current.at < 2500) return
+    lastHeard.current = { text: key, at: now }
+
     void respond(said)
   }
 
@@ -324,7 +347,7 @@ export default function App() {
     // behind an error that never clears.
     const p = store.getState().phase
     if (/microphone/i.test(message) && p !== 'offline' && p !== 'boot') {
-      setAsleep(true)
+      if (!resuming.current) setAsleep(true)
       return
     }
     store.getState().setError(message)
@@ -471,12 +494,15 @@ export default function App() {
     // to the socket — so a drop silently wipes his memory while the transcript
     // on screen still shows it. Better to say so than to let him quietly forget.
     watchConnection((state) => {
+      // The bridge keeps the session while the page is away and hands it
+      // back on reconnect, so a drop is a pause, not a loss. Only one that
+      // happens while you are looking is worth a word.
       if (state === 'lost') {
-        store.getState().setError('Bridge connection lost — reconnecting.')
+        if (document.visibilityState === 'visible') {
+          store.getState().setError('Bridge connection lost — reconnecting.')
+        }
       } else if (state === 'reconnected') {
-        store
-          .getState()
-          .setError('Bridge reconnected. The previous conversation was not kept.')
+        store.getState().setError('')
       }
     })
     const warming = warm().catch((err: Error) => s.setError(err.message))
@@ -589,6 +615,10 @@ export default function App() {
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
         hiddenAt = Date.now()
+        // Put away: a pause. Stop the voice — only the voice. The session,
+        // the answer being written and the conversation all carry on.
+        silencedTurn.current = turn.current
+        speaker.current?.cancel()
         return
       }
       const away = hiddenAt ? Date.now() - hiddenAt : 0
@@ -601,6 +631,17 @@ export default function App() {
   }, [store])
 
   const resume = async () => {
+    // Taps arrive in bursts on a phone; one resume at a time.
+    if (resuming.current) return
+    resuming.current = true
+    try {
+      await resumeOnce()
+    } finally {
+      resuming.current = false
+    }
+  }
+
+  const resumeOnce = async () => {
     setAsleep(false)
     store.getState().setError('')
     // Everything that needs the tap, first, before anything awaits — the
@@ -630,9 +671,14 @@ export default function App() {
         onError: onVoiceError,
       })
     } catch (err) {
-      onVoiceError(String((err as Error)?.message ?? err))
+      store.getState().setError(String((err as Error)?.message ?? err))
     }
-    store.getState().setPhase('dormant')
+    // An answer still being written finishes on its own and sets the phase
+    // itself; only an idle interface goes back to waiting for its name.
+    const p = store.getState().phase
+    if (p !== 'thinking' && p !== 'tooling' && p !== 'speaking') {
+      store.getState().setPhase('dormant')
+    }
   }
 
   // -- clap to start --------------------------------------------------------
