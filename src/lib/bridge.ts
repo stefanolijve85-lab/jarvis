@@ -43,6 +43,12 @@ type Frame = {
 
 /** Every question gets an id so its answer can be told from anyone else's. */
 let askSeq = 0
+/**
+ * Unique to this page. Ids used to restart at a1 in every page, and once a
+ * reopened page can be replayed frames from the page before it, its own "a1"
+ * would have been answered by the old one's.
+ */
+const pageTag = Math.random().toString(36).slice(2, 8)
 
 let socket: WebSocket | null = null
 let connecting: Promise<WebSocket> | null = null
@@ -178,6 +184,14 @@ function dispatch(ws: WebSocket) {
     if (typeof msg.seq === 'number') {
       if (msg.type === 'ready' && !msg.resumed) lastSeq = msg.seq
       else if (msg.type !== 'ready') lastSeq = Math.max(lastSeq, msg.seq)
+      persistSeq()
+    }
+
+    // The end of an answer that was asked by an earlier page — this one was
+    // reopened after the old one was killed mid-answer. Nobody is listening
+    // for it, so it is handed over to be shown.
+    if (msg.type === 'done' && msg.ask && msg.ask !== pendingId && msg.text) {
+      onOrphan?.(msg.text)
     }
 
     if (msg.type === 'ready') {
@@ -231,28 +245,94 @@ function dispatch(ws: WebSocket) {
  * conversation — and any answer that was being written — instead of a new one.
  * Kept in sessionStorage so a reload of the same tab is the same client too.
  */
+const makeId = () =>
+  (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '')
+
+/**
+ * In localStorage, not sessionStorage: swiping the app away from the recents
+ * list ends the tab, and the id has to outlive that for the page that opens
+ * next to find its session again.
+ */
 function sessionId(): string {
-  const make = () =>
-    (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9_-]/g, '')
   try {
-    let id = sessionStorage.getItem('jarvis-sid')
+    let id = localStorage.getItem('jarvis-sid')
     if (!id) {
-      id = make()
-      sessionStorage.setItem('jarvis-sid', id)
+      id = makeId()
+      localStorage.setItem('jarvis-sid', id)
     }
     return id
   } catch {
-    return (sessionIdFallback ??= make())
+    return (sessionIdFallback ??= makeId())
   }
 }
 let sessionIdFallback: string | null = null
+
+/** Writes lastSeq down, at most twice a second, and at once on request. */
+let seqTimer = 0
+function persistSeq(now = false) {
+  const write = () => {
+    seqTimer = 0
+    try {
+      localStorage.setItem('jarvis-seq', String(lastSeq))
+    } catch {
+      /* the replay starts from where the bridge parked instead */
+    }
+  }
+  if (now) {
+    clearTimeout(seqTimer)
+    write()
+  } else if (!seqTimer) {
+    seqTimer = window.setTimeout(write, 500)
+  }
+}
+
+/** Keep the frame count across the page being killed and reopened. */
+export function saveSessionState() {
+  persistSeq(true)
+}
+
+/**
+ * Start over, on purpose: the bridge is told to end the session (not park
+ * it), and the page takes a new id, so the next connection is a fresh one.
+ */
+export function newConversation() {
+  cancel()
+  if (socket?.readyState === WebSocket.OPEN) {
+    try {
+      socket.send(JSON.stringify({ type: 'end' }))
+    } catch {
+      /* closing anyway */
+    }
+  }
+  socket?.close()
+  socket = null
+  lastSeq = 0
+  try {
+    localStorage.setItem('jarvis-sid', makeId())
+    localStorage.removeItem('jarvis-seq')
+  } catch {
+    sessionIdFallback = makeId()
+  }
+}
+
+/** An answer that finished with nobody waiting for it — the page was gone. */
+let onOrphan: ((text: string) => void) | null = null
+export function watchOrphanAnswers(fn: (text: string) => void) {
+  onOrphan = fn
+}
 
 /**
  * The number of the last frame this page received. Sent on reconnect, so the
  * bridge replays exactly what was missed — nothing lost in the drop, nothing
  * doubled.
  */
-let lastSeq = 0
+let lastSeq = (() => {
+  try {
+    return Number(localStorage.getItem('jarvis-seq')) || 0
+  } catch {
+    return 0
+  }
+})()
 
 function socketUrl(): string {
   const url = new URL(BRIDGE_WS_URL)
@@ -362,6 +442,8 @@ const IDLE_TIMEOUT_MS = 120_000
 
 /** The turn in flight, so a barge-in can settle it locally. */
 let pending: { finish: (fallback?: string) => void } | null = null
+/** The id of the turn this page is waiting on, if any. */
+let pendingId: string | null = null
 
 export async function ask(
   prompt: string,
@@ -414,7 +496,8 @@ export async function ask(
     return { text: '', tools: [] }
   }
 
-  const id = `a${++askSeq}`
+  const id = `a${pageTag}-${++askSeq}`
+  pendingId = id
   const tools: string[] = []
   let text = ''
 
@@ -425,6 +508,7 @@ export async function ask(
     const cleanup = () => {
       done = true
       pending = null
+      if (pendingId === id) pendingId = null
       clearTimeout(timer)
       unlisten(current)
     }

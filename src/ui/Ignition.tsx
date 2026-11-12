@@ -33,7 +33,7 @@ import { useStore } from '../store'
  * mounting is not the dangerous direction; the fade-out is gone, and the boot
  * sequence takes the screen immediately anyway, so there is nothing to see.
  */
-export function Ignition({ onStart }: { onStart: () => void }) {
+export function Ignition({ onStart, resume = false }: { onStart: () => void; resume?: boolean }) {
   const phase = useStore((s) => s.phase)
   if (phase !== 'offline') return null
 
@@ -47,8 +47,12 @@ export function Ignition({ onStart }: { onStart: () => void }) {
       */}
       <span className="ignition-ring" />
       <span className="ignition-label">
-        <span className="ignition-word">INITIALISE</span>
-        <span className="ignition-sub">click, or clap, to power up</span>
+        {/* A conversation was in progress when the app was last put away:
+            this tap continues it, without the start-up sequence. */}
+        <span className="ignition-word">{resume ? 'VERDER GAAN' : 'INITIALISE'}</span>
+        <span className="ignition-sub">
+          {resume ? 'tik om het gesprek te hervatten' : 'click, or clap, to power up'}
+        </span>
       </span>
     </button>
   )

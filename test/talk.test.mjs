@@ -183,3 +183,12 @@ test('the talk app and the interface never share a session', async () => {
   assert.equal(t.first.resumed, undefined)
   t.ws.close()
 })
+
+test('ending a session on purpose does not leave it to be resumed', async () => {
+  const a = await openWs(on.port, '?sid=endedclient01')
+  a.ws.send(JSON.stringify({ type: 'end' }))
+  await new Promise((resolve) => a.ws.once('close', resolve))
+  const b = await openWs(on.port, '?sid=endedclient01')
+  assert.equal(b.first.resumed, undefined)
+  b.ws.close()
+})

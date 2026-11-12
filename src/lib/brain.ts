@@ -129,3 +129,18 @@ export function watchConnection(
 export function connectedLabels(): string[] {
   return usingBridge ? bridge.bridgeServers() : direct.connectedLabels()
 }
+
+/** An answer that finished after the page that asked for it was gone. */
+export function watchOrphanAnswers(fn: (text: string) => void): void {
+  if (usingBridge) bridge.watchOrphanAnswers(fn)
+}
+
+/** End this conversation on purpose and start the next one fresh. */
+export function newConversation(): void {
+  if (usingBridge) bridge.newConversation()
+}
+
+/** Write down what is needed to resume after the page is killed. */
+export function saveSessionState(): void {
+  if (usingBridge) bridge.saveSessionState()
+}

@@ -293,6 +293,19 @@ faster; `onnx-community/whisper-large-v3-turbo` understands far better but
 needs a strong CPU. `JARVIS_TALK_LANGUAGE` sets the language (default `nl-NL`),
 and `JARVIS_WHISPER=off` turns hearing off.
 
+### The conversation survives the app being closed
+
+Putting the app away, locking the phone, or swiping it out of the recents list
+is a pause, not a reset. The page writes the conversation and its session id
+to the phone's own storage on every turn and when it is put away. The bridge
+keeps the session for 12 hours after its client goes (`JARVIS_PARK_MINUTES`),
+numbering every frame. When the app opens again it shows the conversation,
+offers **VERDER GAAN** instead of the start-up sequence, and continues the same
+session, including any answer that finished while it was closed. The voice is
+stopped whenever the app is put away, so two voices never overlap. Only saying
+*"nieuw gesprek"* / *"new conversation"* (start over) or *"sluit af"* /
+*"quit"* ends it.
+
 ### Keep JARVIS running (Linux)
 
 ```bash

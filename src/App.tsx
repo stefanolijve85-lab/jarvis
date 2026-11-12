@@ -10,6 +10,7 @@ import { createSpeaker, cycleVoice, currentVoiceName, unlockSpeechOutput } from 
 import * as sfx from './lib/sfx'
 import * as music from './lib/music'
 import { bootSkipped } from './lib/bootSkip'
+import { clearConversation, loadConversation, saveConversation } from './lib/persist'
 import * as hands from './lib/hands'
 import { listenForClap } from './lib/clap'
 import * as camera from './lib/camera'
@@ -26,6 +27,9 @@ import {
   watchCapture,
   watchUi,
   watchConnection,
+  watchOrphanAnswers,
+  newConversation,
+  saveSessionState,
   connectedLabels,
   usingBridge,
   type Msg,
@@ -76,6 +80,12 @@ export default function App() {
   const phase = useStore((s) => s.phase)
   /** The page was put away (screen locked, app switched) and must be woken. */
   const [asleep, setAsleep] = useState(false)
+  /**
+   * The conversation this page found on opening — left by a page that was
+   * swiped away. Restored to the screen at once; the tap that starts JARVIS
+   * then continues it, skipping the start-up sequence.
+   */
+  const [saved] = useState(loadConversation)
   const history = useRef<Msg[]>([])
   const speaker = useRef<ReturnType<typeof createSpeaker> | null>(null)
   const voice = useRef<Voice | null>(null)
@@ -324,6 +334,17 @@ export default function App() {
       return
     }
 
+    // Starting over, and quitting, are commands — never questions for the model.
+    const command = said.toLowerCase().replace(/[^\p{L}\s]/gu, '').trim()
+    if (/^(nieuw gesprek|nieuwe conversatie|begin opnieuw|new conversation|start over|start a new conversation)$/.test(command)) {
+      startOver(false)
+      return
+    }
+    if (/^(sluit af|afsluiten|stop jarvis|quit|quit jarvis|shut down)$/.test(command)) {
+      startOver(true)
+      return
+    }
+
     // The same words twice within a moment are one utterance heard by two
     // listeners (or delivered twice), not two questions. Answering both is
     // what produced two voices over each other.
@@ -385,6 +406,8 @@ export default function App() {
 
   const ignite = async () => {
     const s = store.getState()
+    // Coming back to a conversation, not switching on: no fanfare.
+    const quick = saved !== null
 
     // Must happen inside the click handler — browsers won't start an
     // AudioContext or speech synthesis without a user gesture. The speech
@@ -393,14 +416,17 @@ export default function App() {
     unlockSpeechOutput()
     keepScreenOn()
     await sfx.unlockAudio()
-    sfx.play('boot')
     // The score. Must be started from inside this click handler for the same
     // reason as the rest of the audio.
     music.enable()
-    music.playBoot()
-    music.startAmbient()
-
-    s.setPhase('boot')
+    if (!quick) {
+      sfx.play('boot')
+      music.playBoot()
+      music.startAmbient()
+      s.setPhase('boot')
+    } else {
+      s.setPhase('thinking')
+    }
 
     watchServers((servers) => store.getState().setConnected(servers))
     watchPanels((panel) => store.getState().pushPanel(panel))
@@ -537,7 +563,7 @@ export default function App() {
     // still rising as the reactor lands.
     // The skip button (or Escape) ends the wait at once and cuts the start-up
     // music short, rather than leaving it playing under the live interface.
-    await Promise.race([
+    if (!quick) await Promise.race([
       new Promise((r) => setTimeout(r, 9200)), // boot sequence
       bootSkipped().then(() => music.cutBoot()),
     ])
@@ -629,6 +655,80 @@ export default function App() {
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [store])
+
+  // -- the conversation survives the app being swiped away ------------------
+
+  useEffect(() => {
+    // What the last page left on screen, back on screen before anything else.
+    if (saved && !store.getState().turns.length) {
+      for (const t of saved.turns) store.getState().pushTurn(t)
+    }
+
+    // Written down on every change to the conversation (a little later, so a
+    // streaming answer is not written forty times a second)…
+    let timer = 0
+    const save = () => {
+      clearTimeout(timer)
+      timer = 0
+      const st = store.getState()
+      saveConversation(st.turns, st.phase)
+      saveSessionState()
+    }
+    const unsubscribe = store.subscribe((st, prev) => {
+      if (st.turns !== prev.turns && !timer) timer = window.setTimeout(save, 400)
+    })
+    // …and at once when the page is put away or torn down, with the voice
+    // stopped so nothing is left speaking over the next page.
+    const away = () => {
+      speaker.current?.cancel()
+      save()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') away()
+    }
+    window.addEventListener('pagehide', away)
+    document.addEventListener('visibilitychange', onVisibility)
+
+    // An answer the killed page asked for, finished while nobody was here.
+    watchOrphanAnswers((text) => {
+      const st = store.getState()
+      const last = st.turns[st.turns.length - 1]
+      if (last?.role === 'jarvis' && text.startsWith(last.text)) {
+        if (text.length > last.text.length) st.appendToLastTurn(text.slice(last.text.length))
+      } else if (!st.turns.some((t) => t.role === 'jarvis' && t.text === text)) {
+        st.pushTurn({ id: newId(), role: 'jarvis', text })
+      }
+    })
+
+    return () => {
+      unsubscribe()
+      clearTimeout(timer)
+      window.removeEventListener('pagehide', away)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store])
+
+  /**
+   * Starting over is deliberate: "new conversation" (or quitting) ends the
+   * session at the bridge, takes a new session id, and clears the screen and
+   * what was saved. Nothing else ever clears it.
+   */
+  const startOver = (quit: boolean) => {
+    speaker.current?.cancel()
+    newConversation()
+    clearConversation()
+    const st = store.getState()
+    st.clearScreen('all')
+    if (quit) {
+      voice.current?.stop()
+      voice.current = null
+      booting.current = false
+      st.setPhase('offline')
+    } else {
+      st.setPhase('dormant')
+    }
+  }
 
   const resume = async () => {
     // Taps arrive in bursts on a phone; one resume at a time.
@@ -855,7 +955,7 @@ export default function App() {
       <Hud />
       <Boot />
       <Diagnostics />
-      <Ignition onStart={() => void powerOn()} />
+      <Ignition onStart={() => void powerOn()} resume={saved !== null} />
       {asleep && (
         <button type="button" className="wake-overlay" onClick={() => void resume()}>
           <span className="wake-ring" aria-hidden="true" />

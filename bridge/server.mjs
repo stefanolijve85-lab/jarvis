@@ -1724,7 +1724,12 @@ const RESULT_FAILURES = {
  * it missed. Parked sessions are closed after PARK_MS without a client.
  */
 const sessions = new Map()
-const PARK_MS = 15 * 60 * 1000
+/**
+ * How long a session waits for its client. Long, because a phone app swiped
+ * away in the evening is reopened the next morning; a parked session costs only
+ * the idle agent process. JARVIS_PARK_MINUTES changes it.
+ */
+const PARK_MS = Math.max(1, Number(process.env.JARVIS_PARK_MINUTES) || 12 * 60) * 60 * 1000
 const MAX_HELD = 2000
 
 wss.on('connection', (socket, req) => {
@@ -2150,6 +2155,15 @@ wss.on('connection', (socket, req) => {
       })
     }
 
+    // A deliberate "new conversation" or quit: end the session for good rather
+    // than parking it for a client that is not coming back to it.
+    if (msg.type === 'end') {
+      console.log('[jarvis] client ended its session')
+      teardown()
+      link?.close()
+      return
+    }
+
     if (msg.type === 'reply' && typeof msg.id === 'string') {
       const slot = waiting.get(msg.id)
       if (slot) {
@@ -2198,7 +2212,7 @@ wss.on('connection', (socket, req) => {
         return
       }
       parkedAt = seq
-      console.log('[jarvis] client away — keeping the session for 15 minutes')
+      console.log(`[jarvis] client away — keeping the session for ${Math.round(PARK_MS / 60_000)} minutes`)
       clearTimeout(parkTimer)
       parkTimer = setTimeout(() => {
         console.log('[jarvis] client did not come back — session closed')
