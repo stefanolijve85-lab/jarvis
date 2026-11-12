@@ -1,20 +1,43 @@
 name: Morning briefing
 
+# Eight o'clock in the Netherlands, all year. GitHub's schedule is in UTC and
+# knows nothing of summer time, so the job is started at both 06:00 and 07:00
+# UTC and the first step lets only the run that falls on 08:00 Amsterdam time
+# through. A manual run (workflow_dispatch) always sends.
 on:
   schedule:
-    # 07:00 UTC is 08:00 in the Netherlands in winter (CET).
-    # In summer (CEST) change to "0 6 * * *".
-    - cron: "0 7 * * *"
+    - cron: "0 6,7 * * *"
   workflow_dispatch:
 
 jobs:
   briefing:
     runs-on: ubuntu-latest
+    env:
+      TG_BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+      WA_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+      WA_PHONE_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+      WA_TO: ${{ secrets.WHATSAPP_TO }}
+      # Optional. WhatsApp only delivers free text within 24 hours of your own
+      # last message to the number; a daily briefing usually needs an approved
+      # template with one {{1}} placeholder for the text. Set its name here.
+      WA_TEMPLATE: ${{ secrets.WHATSAPP_TEMPLATE }}
+      WA_TEMPLATE_LANG: ${{ secrets.WHATSAPP_TEMPLATE_LANG }}
     steps:
-      - name: Build and send briefing
-        env:
-          TG_BOT: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: Is it eight o'clock in Amsterdam?
+        id: clock
+        run: |
+          HOUR=$(TZ=Europe/Amsterdam date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$HOUR" = "08" ]; then
+            echo "send=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "It is ${HOUR}:00 in Amsterdam — the other scheduled run sends today."
+            echo "send=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the briefing
+        id: build
+        if: steps.clock.outputs.send == 'yes'
         run: |
           W=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=52.78&longitude=6.90&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=Europe%2FAmsterdam&forecast_days=1")
           MAX=$(echo "$W" | jq -r '.daily.temperature_2m_max[0]')
@@ -23,6 +46,58 @@ jobs:
           TEXT="Good morning, Stefan. Emmen today: ${MIN} to ${MAX} degrees, rain ${RAIN} mm.
           Health: walk for twenty minutes, drink water before coffee.
           Happiness: message one person you have not spoken to this week."
-          curl -s "https://api.telegram.org/bot${TG_BOT}/sendMessage" \
+          {
+            echo "text<<BRIEFING_END"
+            echo "$TEXT"
+            echo "BRIEFING_END"
+          } >> "$GITHUB_OUTPUT"
+
+      # Each channel on its own: one failing never stops the other.
+      - name: Send on Telegram
+        if: steps.clock.outputs.send == 'yes' && env.TG_BOT != '' && env.TG_CHAT != ''
+        continue-on-error: true
+        env:
+          TEXT: ${{ steps.build.outputs.text }}
+        run: |
+          OUT=$(curl -s "https://api.telegram.org/bot${TG_BOT}/sendMessage" \
             --data-urlencode "chat_id=${TG_CHAT}" \
-            --data-urlencode "text=${TEXT}"
+            --data-urlencode "text=${TEXT}")
+          if [ "$(echo "$OUT" | jq -r '.ok')" != "true" ]; then
+            echo "::error::Telegram refused the briefing: $(echo "$OUT" | jq -r '.description')"
+            exit 1
+          fi
+          echo "Sent on Telegram."
+
+      - name: Send on WhatsApp
+        if: steps.clock.outputs.send == 'yes' && env.WA_TOKEN != '' && env.WA_PHONE_ID != '' && env.WA_TO != ''
+        continue-on-error: true
+        env:
+          TEXT: ${{ steps.build.outputs.text }}
+        run: |
+          TO=$(echo "$WA_TO" | tr -cd '0-9')
+          if [ -n "$WA_TEMPLATE" ]; then
+            # A template parameter may not contain newlines or tabs.
+            PARAM=$(printf '%s' "$TEXT" | tr '\n\t' '  ' | sed 's/  */ /g')
+            BODY=$(jq -n --arg to "$TO" --arg name "$WA_TEMPLATE" --arg lang "${WA_TEMPLATE_LANG:-en}" --arg p "$PARAM" \
+              '{messaging_product:"whatsapp", to:$to, type:"template",
+                template:{name:$name, language:{code:$lang},
+                  components:[{type:"body", parameters:[{type:"text", text:$p}]}]}}')
+          else
+            BODY=$(jq -n --arg to "$TO" --arg t "$TEXT" \
+              '{messaging_product:"whatsapp", to:$to, type:"text", text:{body:$t}}')
+          fi
+          OUT=$(curl -s -X POST "https://graph.facebook.com/v20.0/${WA_PHONE_ID}/messages" \
+            -H "Authorization: Bearer ${WA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+          CODE=$(echo "$OUT" | jq -r '.error.code // empty')
+          if [ -n "$CODE" ]; then
+            MSG=$(echo "$OUT" | jq -r '.error.error_data.details // .error.message')
+            if [ "$CODE" = "131047" ]; then
+              echo "::error::WhatsApp: outside the 24-hour window. Set the WHATSAPP_TEMPLATE secret to an approved template with one {{1}} placeholder."
+            else
+              echo "::error::WhatsApp refused the briefing (code ${CODE}): ${MSG}"
+            fi
+            exit 1
+          fi
+          echo "Sent on WhatsApp."
